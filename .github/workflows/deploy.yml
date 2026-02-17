@@ -1,0 +1,72 @@
+name: Deploy to AWS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  id-token: write # This is required for requesting the JWT
+  contents: read
+
+env:
+  AWS_REGION: us-west-2
+  TF_VERSION: 1.5.7
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform/envs/dev
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          # You need to create an OIDC Provider in AWS IAM and a Role for GitHub Actions
+          # For now, we assume user will configure secrets.AWS_ACCESS_KEY_ID / SECRET
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Build Lambda Package
+        run: |
+          cd ../../..
+          # Install zip
+          sudo apt-get install -y zip
+
+          # Create build dir
+          mkdir -p build
+
+          # We don't use Docker here to save time, we install directly
+          # Ideally, use a python container, but standard runner is usually fine for pure python
+          # If pure python, we can just zip. If dependencies have binaries (pgvector), we NEED Docker.
+          # RagOps has binary deps. We MUST use the script or Docker.
+
+          ./scripts/package_lambda.sh
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve
+        env:
+          TF_VAR_neon_connection_string: ${{ secrets.NEON_CONNECTION_STRING }}
+          TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          TF_VAR_gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          TF_VAR_anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          TF_VAR_groq_api_key: ${{ secrets.GROQ_API_KEY }}
+          TF_VAR_llm_provider: "openai"
+          TF_VAR_embedding_provider: "openai"

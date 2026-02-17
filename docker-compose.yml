@@ -1,0 +1,36 @@
+services:
+  # Local PostgreSQL with pgvector
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: ragops-db
+    environment:
+      POSTGRES_DB: ragops
+      POSTGRES_USER: ragops
+      POSTGRES_PASSWORD: ragops
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./services/core/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ragops -d ragops"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # RAG Ops CLI (Development Container)
+  ragops:
+    build: .
+    container_name: ragops-cli
+    volumes:
+      - .:/app
+    environment:
+      - DB_HOST=postgres
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+

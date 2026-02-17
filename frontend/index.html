@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RAG Ops Onboarding Chat</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="bg-shape bg-one"></div>
+  <div class="bg-shape bg-two"></div>
+  <main class="app">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Junior Onboarding</p>
+        <h1>Codebase Chat Console</h1>
+        <p class="subtitle">Ask questions, follow citations, and score answer quality in one place.</p>
+      </div>
+      <button id="new-session-btn" class="ghost-btn" type="button">New Session</button>
+    </header>
+
+    <section class="config-panel">
+      <h2>Connection</h2>
+      <div class="config-grid">
+        <label>
+          API Base URL
+          <input id="api-url" type="url" placeholder="http://localhost:8090">
+        </label>
+        <label>
+          API Key (optional)
+          <input id="api-key" type="text" placeholder="X-API-Key">
+        </label>
+        <label>
+          Collection
+          <input id="collection" type="text" value="default">
+        </label>
+        <label>
+          Mode
+          <select id="mode">
+            <option value="default">default</option>
+            <option value="explain_like_junior">explain_like_junior</option>
+            <option value="show_where_in_code">show_where_in_code</option>
+            <option value="step_by_step">step_by_step</option>
+          </select>
+        </label>
+        <label>
+          Answer Style
+          <select id="answer-style">
+            <option value="concise">concise</option>
+            <option value="detailed">detailed</option>
+          </select>
+        </label>
+        <label>
+          Top K
+          <input id="top-k" type="number" min="1" max="50" value="5">
+        </label>
+        <label>
+          Session ID
+          <input id="session-id" type="text" placeholder="auto-generated">
+        </label>
+      </div>
+    </section>
+
+    <section class="chat-shell">
+      <div id="chat-feed" class="chat-feed" aria-live="polite"></div>
+      <form id="chat-form" class="composer">
+        <label class="composer-label" for="question-input">Question</label>
+        <textarea id="question-input" rows="3" placeholder="How should I start learning this codebase?"></textarea>
+        <div class="composer-actions">
+          <span id="status-pill" class="status-pill idle">Ready</span>
+          <button id="send-btn" type="submit">Send</button>
+        </div>
+      </form>
+    </section>
+  </main>
+
+  <template id="message-template">
+    <article class="msg">
+      <header class="msg-head">
+        <span class="role"></span>
+        <span class="meta"></span>
+      </header>
+      <pre class="content"></pre>
+      <div class="citations-wrap hidden">
+        <p class="citations-title">Citations</p>
+        <ul class="citations"></ul>
+      </div>
+      <div class="feedback-wrap hidden">
+        <div class="feedback-row">
+          <button class="feedback-btn" data-verdict="positive" type="button">Helpful</button>
+          <button class="feedback-btn" data-verdict="negative" type="button">Needs Work</button>
+        </div>
+      </div>
+      <div class="context-wrap hidden">
+        <button class="context-btn" type="button">Show Raw Context</button>
+        <ul class="context-list hidden"></ul>
+      </div>
+    </article>
+  </template>
+
+  <script src="./app.js" type="module"></script>
+</body>
+</html>

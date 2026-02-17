@@ -1,0 +1,519 @@
+"""Database connection pool and data-access helpers for Aurora/pgvector."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import re
+from pathlib import Path
+from typing import Any
+
+import psycopg
+from pgvector.psycopg import register_vector
+from psycopg.rows import dict_row
+
+from services.core.config import Settings, get_settings
+
+logger = logging.getLogger(__name__)
+
+SCHEMA_PATH = Path(__file__).parent / "schema.sql"
+VECTOR_TYPE_PATTERN = re.compile(r"^vector(?:\((\d+)\))?$")
+INVALID_DSN_LITERALS = {"yes", "no", "true", "false", "on", "off", "1", "0"}
+
+# ---------------------------------------------------------------------------
+# Connection helpers
+# ---------------------------------------------------------------------------
+
+
+def get_connection(settings: Settings | None = None) -> psycopg.Connection:
+    """Create a new database connection with pgvector support."""
+    s = settings or get_settings()
+
+    db_url = s.database_url or s.neon_connection_string
+    if db_url:
+        normalized = normalize_db_url(db_url)
+        conn = psycopg.connect(
+            normalized,
+            row_factory=dict_row,
+            autocommit=False,
+        )
+    else:
+        conn = psycopg.connect(
+            host=s.db_host,
+            port=s.db_port,
+            dbname=s.db_name,
+            user=s.db_user,
+            password=s.db_password,
+            row_factory=dict_row,
+            autocommit=False,
+        )
+
+    register_vector(conn)
+    return conn
+
+
+def normalize_db_url(db_url: str) -> str:
+    """Normalize and validate DSN-style connection URL values."""
+    normalized = db_url.strip()
+    if not normalized:
+        raise ValueError("DATABASE_URL/NEON_CONNECTION_STRING is empty")
+    if normalized.lower() in INVALID_DSN_LITERALS:
+        raise ValueError(
+            "DATABASE_URL/NEON_CONNECTION_STRING is invalid "
+            f"(received boolean-like value: {normalized!r}). "
+            "Set it to a full Postgres DSN, for example: "
+            "postgresql://user:pass@host/db?sslmode=require"
+        )
+    return normalized
+
+
+def init_schema(conn: psycopg.Connection) -> None:
+    """Apply the schema SQL to the database."""
+    sql = SCHEMA_PATH.read_text()
+    conn.execute(sql)
+    conn.commit()
+    logger.info("Database schema initialized")
+
+
+def parse_vector_dimension(type_name: str) -> int | None:
+    """Parse Postgres vector type declarations like 'vector(1536)'."""
+    match = VECTOR_TYPE_PATTERN.match(type_name.strip().lower())
+    if not match:
+        return None
+    dim = match.group(1)
+    return int(dim) if dim else None
+
+
+def get_chunks_embedding_dimension(conn: psycopg.Connection) -> int | None:
+    """Return configured vector dimension for chunks.embedding, if fixed."""
+    row = conn.execute(
+        """
+        SELECT format_type(a.atttypid, a.atttypmod) AS embedding_type
+        FROM pg_attribute a
+        JOIN pg_class c ON c.oid = a.attrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND c.relname = 'chunks'
+          AND a.attname = 'embedding'
+          AND NOT a.attisdropped
+        """
+    ).fetchone()
+    if not row:
+        return None
+    return parse_vector_dimension(str(row["embedding_type"]))
+
+
+def validate_embedding_dimension(conn: psycopg.Connection, provider_dimension: int) -> None:
+    """Validate provider embedding size against DB schema if schema is fixed."""
+    schema_dimension = get_chunks_embedding_dimension(conn)
+    if schema_dimension is None:
+        return
+    if schema_dimension != provider_dimension:
+        raise ValueError(
+            "Embedding dimension mismatch: "
+            f"database expects {schema_dimension}, provider returns {provider_dimension}. "
+            "Use a compatible embedding provider or migrate the schema."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Document operations
+# ---------------------------------------------------------------------------
+
+
+def compute_sha256(content: str) -> str:
+    """Compute SHA256 hash of text content."""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def document_exists(conn: psycopg.Connection, sha256: str, collection: str) -> int | None:
+    """Check if a document with this SHA256 already exists. Returns doc id or None."""
+    row = conn.execute(
+        "SELECT id FROM documents WHERE sha256 = %s AND collection = %s",
+        (sha256, collection),
+    ).fetchone()
+    return row["id"] if row else None
+
+
+def upsert_document(
+    conn: psycopg.Connection,
+    s3_key: str,
+    sha256: str,
+    collection: str = "default",
+    metadata: dict[str, Any] | None = None,
+) -> int:
+    """Insert or update a document record. Returns the document id."""
+    import json
+
+    meta_json = json.dumps(metadata or {})
+    row = conn.execute(
+        """
+        INSERT INTO documents (s3_key, sha256, collection, metadata)
+        VALUES (%s, %s, %s, %s::jsonb)
+        ON CONFLICT (sha256, collection)
+        DO UPDATE SET s3_key = EXCLUDED.s3_key, metadata = EXCLUDED.metadata
+        RETURNING id
+        """,
+        (s3_key, sha256, collection, meta_json),
+    ).fetchone()
+    conn.commit()
+    return row["id"]  # type: ignore[index]
+
+
+# ---------------------------------------------------------------------------
+# Chunk operations
+# ---------------------------------------------------------------------------
+
+
+def upsert_chunks(
+    conn: psycopg.Connection,
+    document_id: int,
+    chunks: list[dict[str, Any]],
+) -> int:
+    """Insert chunks for a document. Deletes old chunks first (full re-index).
+
+    Each chunk dict should have: content, embedding, chunk_index,
+    and optionally: token_count, source_file, line_start, line_end.
+
+    Returns the number of chunks inserted.
+    """
+    # Delete existing chunks for this document (re-index strategy)
+    conn.execute("DELETE FROM chunks WHERE document_id = %s", (document_id,))
+
+    if not chunks:
+        conn.commit()
+        return 0
+
+    with conn.cursor() as cur:
+        for chunk in chunks:
+            cur.execute(
+                """
+                INSERT INTO chunks
+                    (document_id, chunk_index, content, embedding,
+                     token_count, source_file, line_start, line_end)
+                VALUES (%s, %s, %s, %s::vector, %s, %s, %s, %s)
+                """,
+                (
+                    document_id,
+                    chunk["chunk_index"],
+                    chunk["content"],
+                    str(chunk["embedding"]),
+                    chunk.get("token_count"),
+                    chunk.get("source_file"),
+                    chunk.get("line_start"),
+                    chunk.get("line_end"),
+                ),
+            )
+    conn.commit()
+    logger.info("Inserted %d chunks for document %d", len(chunks), document_id)
+    return len(chunks)
+
+
+# ---------------------------------------------------------------------------
+# Vector search
+# ---------------------------------------------------------------------------
+
+
+def search_vectors(
+    conn: psycopg.Connection,
+    query_embedding: list[float],
+    collection: str = "default",
+    top_k: int = 5,
+) -> list[dict[str, Any]]:
+    """Find the top-K most similar chunks using cosine distance.
+
+    Returns list of dicts with: content, source_file, line_start, line_end,
+    similarity, document s3_key.
+    """
+    rows = conn.execute(
+        """
+        SELECT
+            c.content,
+            c.source_file,
+            c.line_start,
+            c.line_end,
+            c.chunk_index,
+            d.s3_key,
+            1 - (c.embedding <=> %s::vector) AS similarity
+        FROM chunks c
+        JOIN documents d ON d.id = c.document_id
+        WHERE d.collection = %s
+        ORDER BY c.embedding <=> %s::vector
+        LIMIT %s
+        """,
+        (str(query_embedding), collection, str(query_embedding), top_k),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Chat session operations
+# ---------------------------------------------------------------------------
+
+
+def ensure_chat_tables(conn: psycopg.Connection) -> None:
+    """Create chat tables if they do not exist."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS chat_sessions (
+            session_id      VARCHAR(64) PRIMARY KEY,
+            collection      VARCHAR(128) NOT NULL DEFAULT 'default',
+            mode            VARCHAR(64) NOT NULL DEFAULT 'default',
+            metadata        JSONB DEFAULT '{}'::jsonb,
+            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id              BIGSERIAL PRIMARY KEY,
+            session_id      VARCHAR(64) NOT NULL
+                            REFERENCES chat_sessions(session_id) ON DELETE CASCADE,
+            role            VARCHAR(16) NOT NULL,
+            content         TEXT NOT NULL,
+            citations       JSONB DEFAULT '[]'::jsonb,
+            metadata        JSONB DEFAULT '{}'::jsonb,
+            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            CONSTRAINT chat_messages_role_check
+                CHECK (role IN ('user', 'assistant', 'system'))
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id
+            ON chat_messages (session_id, id)
+        """
+    )
+    conn.commit()
+
+
+def upsert_chat_session(
+    conn: psycopg.Connection,
+    *,
+    session_id: str,
+    collection: str,
+    mode: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Create or update a chat session record."""
+    conn.execute(
+        """
+        INSERT INTO chat_sessions (session_id, collection, mode, metadata)
+        VALUES (%s, %s, %s, %s::jsonb)
+        ON CONFLICT (session_id)
+        DO UPDATE SET
+            collection = EXCLUDED.collection,
+            mode = EXCLUDED.mode,
+            metadata = chat_sessions.metadata || EXCLUDED.metadata,
+            updated_at = NOW()
+        """,
+        (session_id, collection, mode, json.dumps(metadata or {})),
+    )
+    conn.commit()
+
+
+def insert_chat_message(
+    conn: psycopg.Connection,
+    *,
+    session_id: str,
+    role: str,
+    content: str,
+    citations: list[dict[str, Any]] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> int:
+    """Insert a chat message and return message id."""
+    row = conn.execute(
+        """
+        INSERT INTO chat_messages (session_id, role, content, citations, metadata)
+        VALUES (%s, %s, %s, %s::jsonb, %s::jsonb)
+        RETURNING id
+        """,
+        (
+            session_id,
+            role,
+            content,
+            json.dumps(citations or []),
+            json.dumps(metadata or {}),
+        ),
+    ).fetchone()
+    conn.execute(
+        """
+        UPDATE chat_sessions
+        SET updated_at = NOW()
+        WHERE session_id = %s
+        """,
+        (session_id,),
+    )
+    conn.commit()
+    return int(row["id"])
+
+
+def list_chat_messages(
+    conn: psycopg.Connection,
+    *,
+    session_id: str,
+    limit: int = 12,
+) -> list[dict[str, Any]]:
+    """Return most recent messages in chronological order."""
+    rows = conn.execute(
+        """
+        SELECT id, session_id, role, content, citations, metadata, created_at
+        FROM (
+            SELECT id, session_id, role, content, citations, metadata, created_at
+            FROM chat_messages
+            WHERE session_id = %s
+            ORDER BY id DESC
+            LIMIT %s
+        ) recent
+        ORDER BY id ASC
+        """,
+        (session_id, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def count_chat_turns(conn: psycopg.Connection, *, session_id: str) -> int:
+    """Count assistant replies as completed turns."""
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS turns
+        FROM chat_messages
+        WHERE session_id = %s
+          AND role = 'assistant'
+        """,
+        (session_id,),
+    ).fetchone()
+    return int(row["turns"]) if row else 0
+
+
+# ---------------------------------------------------------------------------
+# Feedback operations
+# ---------------------------------------------------------------------------
+
+
+def ensure_feedback_table(conn: psycopg.Connection) -> None:
+    """Create feedback table if it does not exist."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS answer_feedback (
+            id              BIGSERIAL PRIMARY KEY,
+            session_id      VARCHAR(64),
+            collection      VARCHAR(128) NOT NULL DEFAULT 'default',
+            mode            VARCHAR(64) NOT NULL DEFAULT 'default',
+            verdict         VARCHAR(16) NOT NULL,
+            question        TEXT,
+            answer          TEXT,
+            comment         TEXT,
+            citations       JSONB DEFAULT '[]'::jsonb,
+            metadata        JSONB DEFAULT '{}'::jsonb,
+            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            CONSTRAINT answer_feedback_verdict_check
+                CHECK (verdict IN ('positive', 'negative'))
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_answer_feedback_collection_created
+            ON answer_feedback (collection, created_at DESC)
+        """
+    )
+    conn.commit()
+
+
+def insert_feedback(
+    conn: psycopg.Connection,
+    *,
+    verdict: str,
+    collection: str = "default",
+    mode: str = "default",
+    session_id: str | None = None,
+    question: str | None = None,
+    answer: str | None = None,
+    comment: str | None = None,
+    citations: list[dict[str, Any]] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> int:
+    """Insert feedback record and return id."""
+    row = conn.execute(
+        """
+        INSERT INTO answer_feedback (
+            session_id, collection, mode, verdict, question, answer, comment, citations, metadata
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb)
+        RETURNING id
+        """,
+        (
+            session_id,
+            collection,
+            mode,
+            verdict,
+            question,
+            answer,
+            comment,
+            json.dumps(citations or []),
+            json.dumps(metadata or {}),
+        ),
+    ).fetchone()
+    conn.commit()
+    return int(row["id"])
+
+
+def summarize_feedback(
+    conn: psycopg.Connection,
+    *,
+    collection: str | None = None,
+) -> dict[str, Any]:
+    """Summarize feedback counts and positive rate."""
+    if collection:
+        row = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE verdict = 'positive') AS positive,
+                COUNT(*) FILTER (WHERE verdict = 'negative') AS negative
+            FROM answer_feedback
+            WHERE collection = %s
+            """,
+            (collection,),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE verdict = 'positive') AS positive,
+                COUNT(*) FILTER (WHERE verdict = 'negative') AS negative
+            FROM answer_feedback
+            """
+        ).fetchone()
+
+    total = int(row["total"]) if row else 0
+    positive = int(row["positive"]) if row else 0
+    negative = int(row["negative"]) if row else 0
+    positive_rate = (positive / total) if total > 0 else 0.0
+    return {
+        "total": total,
+        "positive": positive,
+        "negative": negative,
+        "positive_rate": round(positive_rate, 4),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Health check
+# ---------------------------------------------------------------------------
+
+
+def health_check(conn: psycopg.Connection) -> dict[str, str]:
+    """Quick DB health check."""
+    try:
+        conn.execute("SELECT 1")
+        return {"db": "ok"}
+    except Exception as exc:
+        logger.error("DB health check failed: %s", exc)
+        return {"db": f"error: {exc}"}

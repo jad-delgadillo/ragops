@@ -1,0 +1,59 @@
+name: Terraform — Validate & Plan
+
+on:
+  push:
+    branches: [main]
+    paths: [terraform/**]
+  pull_request:
+    branches: [main]
+    paths: [terraform/**]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Action to perform"
+        required: true
+        default: "plan"
+        type: choice
+        options:
+          - plan
+          - apply
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform/envs/dev
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7"
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive ../../
+
+      - name: Terraform Init
+        run: terraform init -backend=false
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        if: github.event.inputs.action != 'apply'
+        run: terraform plan -var="vpc_id=vpc-placeholder" -var='subnet_ids=["subnet-placeholder"]' -no-color
+        continue-on-error: true
+
+      - name: Terraform Apply
+        if: github.event.inputs.action == 'apply'
+        run: |
+          echo "⚠️ Manual apply triggered — requires real AWS credentials and variables"
+          echo "Configure AWS credentials and tfvars before running apply."
+          # terraform apply -auto-approve

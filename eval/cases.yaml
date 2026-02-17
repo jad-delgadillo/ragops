@@ -1,0 +1,15 @@
+- id: architecture-entrypoint
+  question: "What is the main CLI entrypoint?"
+  collection: "ragops"
+  expected_source_contains:
+    - "services/cli/main.py"
+  expected_answer_contains:
+    - "cli"
+
+- id: ingest-pipeline
+  question: "Which file implements ingestion from local directories?"
+  collection: "ragops"
+  expected_source_contains:
+    - "services/ingest/app/pipeline.py"
+  expected_answer_contains:
+    - "ingest"

@@ -1,0 +1,56 @@
+name: CI — Lint & Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: ragops
+          POSTGRES_USER: ragops
+          POSTGRES_PASSWORD: ragops
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ragops -d ragops"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_NAME: ragops
+      DB_USER: ragops
+      DB_PASSWORD: ragops
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint with ruff
+        run: ruff check services/
+
+      - name: Run unit tests
+        run: pytest services/ -v --tb=short
+
+      - name: Init DB schema
+        run: |
+          PGPASSWORD=ragops psql -h localhost -U ragops -d ragops -f services/core/schema.sql
