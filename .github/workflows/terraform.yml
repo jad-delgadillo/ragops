@@ -25,6 +25,9 @@ permissions:
 jobs:
   terraform:
     runs-on: ubuntu-latest
+    env:
+      TF_VAR_neon_connection_string: postgresql://ragops:ragops@localhost:5432/ragops
+      TF_VAR_openai_api_key: ci-placeholder-openai-key
     defaults:
       run:
         working-directory: terraform/envs/dev
@@ -40,16 +43,20 @@ jobs:
       - name: Terraform Format Check
         run: terraform fmt -check -recursive ../../
 
+      - name: Prepare placeholder Lambda package
+        run: |
+          mkdir -p ../../../build
+          : > ../../../build/lambda.zip
+
       - name: Terraform Init
-        run: terraform init -backend=false
+        run: terraform init -backend=false -input=false
 
       - name: Terraform Validate
         run: terraform validate
 
       - name: Terraform Plan
         if: github.event.inputs.action != 'apply'
-        run: terraform plan -var="vpc_id=vpc-placeholder" -var='subnet_ids=["subnet-placeholder"]' -no-color
-        continue-on-error: true
+        run: terraform plan -input=false -lock=false -no-color
 
       - name: Terraform Apply
         if: github.event.inputs.action == 'apply'
