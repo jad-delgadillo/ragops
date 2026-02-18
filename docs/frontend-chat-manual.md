@@ -4,6 +4,7 @@
 Run a lightweight junior-onboarding chat screen that uses:
 - `POST /v1/chat`
 - `POST /v1/feedback`
+- `POST /v1/repos/onboard` (optional, disabled by default)
 
 ## 1. Start a Backend
 
@@ -20,6 +21,8 @@ Use your deployed API base URL:
 Important:
 - For generated answers (not retrieval-only fallback), deployed Lambda must include `LLM_ENABLED=true`.
 - In Terraform dev env, set: `TF_VAR_llm_enabled=true` before `terraform apply`.
+- For frontend repo onboarding, set `REPO_ONBOARDING_ENABLED=true` in backend env.
+- For non-local repo onboarding, also set `API_AUTH_ENABLED=true` and provide `API_KEYS_JSON` with `repo_manage` permission.
 
 ## 2. Start the Frontend
 ```bash
@@ -40,6 +43,13 @@ Submit a question. The UI will:
 1. Call `/v1/chat`
 2. Render answer + citations
 3. Let you send `Helpful` or `Needs Work` feedback to `/v1/feedback`
+
+Optional repo onboarding flow:
+1. Fill `GitHub Repo URL` and `Ref` in `Repo Onboarding`.
+2. Click `Onboard Repo`.
+3. UI calls `/v1/repos/onboard` in async mode and receives a `job_id`.
+4. UI polls `/v1/repos/onboard` with `{"action":"status","job_id":"..."}` until completion.
+5. On success, UI auto-sets the active code collection and you can chat against `<repo>_code`.
 
 ## 4. Quick API Test (without browser)
 ```bash
@@ -106,19 +116,18 @@ python -m services.cli.main eval \
 ```
 
 ## 6. Can this read GitHub repos?
-Yes, by cloning repos locally first, then ingesting.
+Yes.
 
-```bash
-git clone https://github.com/<org>/<repo>.git
-cd <repo>
-ragops init
-ragops ingest
-ragops query "How is authentication implemented?"
-```
+Supported options:
+- CLI flow: `repo add` / `repo sync` (git clone/pull on a local machine)
+- Frontend/API flow: `/v1/repos/onboard` (downloads GitHub archive, no local git required)
 
-Current status:
-- Supported: local filesystem ingestion (including cloned GitHub repos)
-- Not yet built: direct ingestion from a GitHub URL without cloning
+Notes:
+- `/v1/repos/onboard` is disabled by default.
+- In non-local deployments, repo onboarding requires `API_AUTH_ENABLED=true` + `X-API-Key`.
+- It targets GitHub URLs and is optimized for public repos.
+- For private repos, configure `GITHUB_TOKEN` in backend environment.
+- Large repos should use async onboarding (default in UI) to avoid API timeout.
 
 ## 7. Troubleshooting
 

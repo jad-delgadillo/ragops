@@ -1,21 +1,25 @@
 <!doctype html>
 <html lang="en">
+
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>RAG Ops Onboarding Chat</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+    rel="stylesheet">
   <link rel="stylesheet" href="./styles.css">
 </head>
+
 <body>
   <div class="bg-shape bg-one"></div>
   <div class="bg-shape bg-two"></div>
   <main class="app">
     <header class="hero">
       <div>
-        <p class="eyebrow">Junior Onboarding</p>
+        <p class="eyebrow">Onboarding</p>
         <h1>Codebase Chat Console</h1>
         <p class="subtitle">Ask questions, follow citations, and score answer quality in one place.</p>
       </div>
@@ -64,6 +68,37 @@
       </div>
     </section>
 
+    <section class="config-panel repo-panel">
+      <h2>Repo Onboarding (Optional)</h2>
+      <div class="repo-grid">
+        <label>
+          GitHub Repo URL
+          <input id="repo-url" type="url" placeholder="https://github.com/org/repo">
+        </label>
+        <label>
+          Ref
+          <input id="repo-ref" type="text" value="main" placeholder="main">
+        </label>
+        <label>
+          Base Collection (optional)
+          <input id="repo-collection" type="text" placeholder="owner-repo">
+        </label>
+      </div>
+      <div class="repo-actions">
+        <label class="repo-toggle">
+          <input id="repo-generate-manuals" type="checkbox" checked>
+          Generate manuals
+        </label>
+        <label class="repo-toggle">
+          <input id="repo-reset-collections" type="checkbox" checked>
+          Reset collections first
+        </label>
+        <button id="repo-onboard-btn" class="ghost-btn" type="button">Onboard Repo</button>
+        <span id="repo-status" class="status-pill idle">Idle</span>
+      </div>
+      <p class="repo-note">Requires backend env <code>REPO_ONBOARDING_ENABLED=true</code>.</p>
+    </section>
+
     <section class="chat-shell">
       <div id="chat-feed" class="chat-feed" aria-live="polite"></div>
       <form id="chat-form" class="composer">
@@ -83,7 +118,7 @@
         <span class="role"></span>
         <span class="meta"></span>
       </header>
-      <pre class="content"></pre>
+      <div class="content"></div>
       <div class="citations-wrap hidden">
         <p class="citations-title">Citations</p>
         <ul class="citations"></ul>
@@ -103,4 +138,5 @@
 
   <script src="./app.js" type="module"></script>
 </body>
+
 </html>

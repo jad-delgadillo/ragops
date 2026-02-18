@@ -8,11 +8,24 @@ from typing import Any
 
 from services.api.app.access import authorize
 from services.core.config import get_settings
+from services.core.database import (
+    ensure_repo_onboarding_jobs_table,
+    get_connection,
+    get_repo_onboarding_job,
+    mark_repo_onboarding_job_failed,
+    mark_repo_onboarding_job_running,
+    mark_repo_onboarding_job_succeeded,
+)
 from services.core.logging import set_request_id, setup_logging
 from services.core.providers import get_embedding_provider
 from services.ingest.app.pipeline import ingest_local_directory
 
 logger = logging.getLogger(__name__)
+
+try:
+    from services.api.app.repo_onboarding import onboard_github_repo
+except Exception:  # pragma: no cover - lazy fallback when optional deps are absent
+    onboard_github_repo = None
 
 
 def lambda_handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
@@ -24,6 +37,9 @@ def lambda_handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]
     settings = get_settings()
     setup_logging(settings.log_level)
     set_request_id(event.get("requestContext", {}).get("requestId"))
+
+    if event.get("internal_action") == "repo_onboard_job":
+        return _handle_repo_onboard_job_event(event, settings)
 
     try:
         body = json.loads(event.get("body", "{}")) if isinstance(event.get("body"), str) else event
@@ -87,6 +103,88 @@ def lambda_handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]
         return {
             "statusCode": 500,
             "body": json.dumps({"error": str(exc)}),
+        }
+
+
+def _handle_repo_onboard_job_event(event: dict[str, Any], settings: Any) -> dict[str, Any]:
+    """Execute an async repo onboarding job on ingest Lambda."""
+    job_id = str(event.get("job_id", "")).strip()
+    if not job_id:
+        return {"statusCode": 400, "body": json.dumps({"error": "Missing job_id"})}
+
+    conn = get_connection(settings)
+    try:
+        ensure_repo_onboarding_jobs_table(conn)
+        job = get_repo_onboarding_job(conn, job_id=job_id)
+        if not job:
+            return {
+                "statusCode": 404,
+                "body": json.dumps({"error": f"Repo onboarding job not found: {job_id}"}),
+            }
+        if str(job.get("status", "")) == "succeeded":
+            return {
+                "statusCode": 200,
+                "body": json.dumps({"status": "succeeded", "job_id": job_id}),
+            }
+        mark_repo_onboarding_job_running(conn, job_id=job_id)
+        request_payload = job.get("request_payload")
+    finally:
+        conn.close()
+
+    if not isinstance(request_payload, dict):
+        conn = get_connection(settings)
+        try:
+            ensure_repo_onboarding_jobs_table(conn)
+            mark_repo_onboarding_job_failed(
+                conn,
+                job_id=job_id,
+                error="Stored request payload is invalid",
+            )
+        finally:
+            conn.close()
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"status": "failed", "job_id": job_id, "error": "Invalid payload"}),
+        }
+
+    try:
+        onboard_fn = onboard_github_repo
+        if onboard_fn is None:
+            from services.api.app.repo_onboarding import onboard_github_repo as onboard_fn
+
+        result = onboard_fn(
+            repo_url=str(request_payload.get("repo_url", "")).strip(),
+            settings=settings,
+            ref=request_payload.get("ref"),
+            name=request_payload.get("name"),
+            collection=request_payload.get("collection"),
+            manuals_collection=request_payload.get("manuals_collection"),
+            generate_manuals=bool(request_payload.get("generate_manuals", True)),
+            reset_code_collection=bool(request_payload.get("reset_code_collection", True)),
+            reset_manuals_collection=bool(request_payload.get("reset_manuals_collection", True)),
+        )
+        payload = result.to_dict()
+        conn = get_connection(settings)
+        try:
+            ensure_repo_onboarding_jobs_table(conn)
+            mark_repo_onboarding_job_succeeded(conn, job_id=job_id, result=payload)
+        finally:
+            conn.close()
+        return {
+            "statusCode": 200,
+            "body": json.dumps({"status": "succeeded", "job_id": job_id}),
+        }
+    except Exception as exc:
+        logger.exception("Repo onboarding job failed: %s", job_id)
+        conn = get_connection(settings)
+        try:
+            ensure_repo_onboarding_jobs_table(conn)
+            mark_repo_onboarding_job_failed(conn, job_id=job_id, error=str(exc))
+        finally:
+            conn.close()
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"status": "failed", "job_id": job_id, "error": str(exc)}),
         }
 
 

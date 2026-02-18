@@ -66,3 +66,21 @@ def test_load_policy_rejects_non_object() -> None:
     )
     with pytest.raises(ValueError):
         load_api_key_policy(settings)
+
+
+def test_authorize_denies_repo_manage_when_permission_missing() -> None:
+    policy = '{"k1":{"name":"bot","permissions":["query","chat"],"collections":["*"]}}'
+    settings = Settings(
+        _env_file=None,
+        API_AUTH_ENABLED="true",
+        API_KEYS_JSON=policy,
+        OPENAI_API_KEY="test",
+    )
+    decision = authorize(
+        settings=settings,
+        headers={"X-API-Key": "k1"},
+        action="repo_manage",
+        collection="default",
+    )
+    assert not decision.allowed
+    assert "repo_manage" in decision.reason

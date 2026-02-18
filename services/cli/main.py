@@ -736,27 +736,40 @@ def _repo_ingest_and_manuals(
     settings: object,
     skip_ingest: bool,
     generate_manuals: bool,
+    manuals_collection: str | None,
     manuals_output: str | None,
-) -> tuple[object | None, object | None, Path | None]:
+    reset_code_collection: bool = False,
+    reset_manuals_collection: bool = False,
+) -> tuple[object | None, object | None, Path | None, str | None]:
     """Optionally ingest repo and generate manuals."""
     from services.cli.docgen.manuals import ManualPackGenerator
+    from services.core.database import get_connection, purge_collection_documents
     from services.core.providers import get_embedding_provider
     from services.ingest.app.pipeline import ingest_local_directory
 
     ingest_stats = None
     manual_ingest_stats = None
     manual_output_dir: Path | None = None
+    resolved_manuals_collection: str | None = None
 
     if not skip_ingest:
+        if reset_code_collection:
+            conn = get_connection(settings)
+            try:
+                purge_collection_documents(conn, collection=collection)
+            finally:
+                conn.close()
         provider = get_embedding_provider(settings)
         ingest_stats = ingest_local_directory(
             directory=str(repo_dir),
             embedding_provider=provider,
             collection=collection,
             settings=settings,
+            extra_ignore_dirs={"manuals"},
         )
 
     if generate_manuals:
+        resolved_manuals_collection = manuals_collection or f"{collection}_manuals"
         manual_output_dir = (
             Path(manuals_output).expanduser().resolve()
             if manuals_output
@@ -767,15 +780,21 @@ def _repo_ingest_and_manuals(
         generator.generate(output_dir=manual_output_dir, include_db=False, settings=None)
 
         if not skip_ingest:
+            if reset_manuals_collection:
+                conn = get_connection(settings)
+                try:
+                    purge_collection_documents(conn, collection=resolved_manuals_collection)
+                finally:
+                    conn.close()
             provider = get_embedding_provider(settings)
             manual_ingest_stats = ingest_local_directory(
                 directory=str(manual_output_dir),
                 embedding_provider=provider,
-                collection=collection,
+                collection=resolved_manuals_collection,
                 settings=settings,
             )
 
-    return ingest_stats, manual_ingest_stats, manual_output_dir
+    return ingest_stats, manual_ingest_stats, manual_output_dir, resolved_manuals_collection
 
 
 def cmd_repo_add(args: argparse.Namespace) -> None:
@@ -792,6 +811,7 @@ def cmd_repo_add(args: argparse.Namespace) -> None:
         load_repo_registry,
         now_utc_iso,
         parse_github_repo_url,
+        resolve_collection_pair,
         save_repo_registry,
         sync_repo,
     )
@@ -804,7 +824,11 @@ def cmd_repo_add(args: argparse.Namespace) -> None:
 
     canonical_url, owner, repo = parse_github_repo_url(args.repo_url)
     repo_name = args.name or default_repo_name(owner, repo)
-    collection = args.collection or repo_name
+    base_collection = args.collection or repo_name
+    collection, manuals_collection = resolve_collection_pair(
+        collection=base_collection,
+        manuals_collection=args.manuals_collection,
+    )
     token = args.github_token or os.getenv("GITHUB_TOKEN")
 
     cache_dir = (
@@ -833,14 +857,22 @@ def cmd_repo_add(args: argparse.Namespace) -> None:
             clone_repo(clone_url=clone_url, destination=repo_dir, ref=args.ref)
             active_ref = args.ref or "default"
 
-        ingest_stats, manual_ingest_stats, manual_output_dir = _repo_ingest_and_manuals(
+        (
+            ingest_stats,
+            manual_ingest_stats,
+            manual_output_dir,
+            resolved_manuals_collection,
+        ) = _repo_ingest_and_manuals(
             repo_dir=repo_dir,
             collection=collection,
             project_root=project_root,
             settings=settings,
             skip_ingest=args.skip_ingest,
             generate_manuals=args.generate_manuals,
+            manuals_collection=manuals_collection,
             manuals_output=args.manuals_output,
+            reset_code_collection=args.reset_code_collection,
+            reset_manuals_collection=args.reset_manuals_collection,
         )
 
     timestamp = now_utc_iso()
@@ -852,6 +884,7 @@ def cmd_repo_add(args: argparse.Namespace) -> None:
         local_path=str(repo_dir),
         ref=args.ref or (previous.ref if previous else None),
         manuals_enabled=bool(args.generate_manuals),
+        manuals_collection=resolved_manuals_collection if args.generate_manuals else None,
         manuals_output=str(manual_output_dir) if manual_output_dir else None,
         added_at=previous.added_at if previous and previous.added_at else timestamp,
         last_sync_at=timestamp,
@@ -881,6 +914,7 @@ def cmd_repo_add(args: argparse.Namespace) -> None:
                 "indexed_docs": manual_ingest_stats.indexed_docs,
                 "skipped_docs": manual_ingest_stats.skipped_docs,
                 "total_chunks": manual_ingest_stats.total_chunks,
+                "collection": resolved_manuals_collection,
             }
         print(json.dumps(payload, indent=2))
         return
@@ -892,6 +926,7 @@ def cmd_repo_add(args: argparse.Namespace) -> None:
         f"[cyan]URL:[/cyan] {canonical_url}",
         f"[cyan]Local path:[/cyan] {repo_dir}",
         f"[cyan]Collection:[/cyan] {collection}",
+        f"[cyan]Manuals collection:[/cyan] {resolved_manuals_collection or 'n/a'}",
         f"[cyan]Ref:[/cyan] {active_ref}",
         f"[cyan]Registry:[/cyan] {registry_file}",
     ]
@@ -903,7 +938,9 @@ def cmd_repo_add(args: argparse.Namespace) -> None:
     if manual_ingest_stats:
         lines.append(
             f"[cyan]Manual ingest:[/cyan] {manual_ingest_stats.indexed_docs} indexed, "
-            f"{manual_ingest_stats.skipped_docs} skipped, {manual_ingest_stats.total_chunks} chunks"
+            f"{manual_ingest_stats.skipped_docs} skipped, "
+            f"{manual_ingest_stats.total_chunks} chunks "
+            f"into '{resolved_manuals_collection}'"
         )
     console.print()
     console.print(Panel("\n".join(lines), title="ragops repo add", border_style="green"))
@@ -917,6 +954,7 @@ def cmd_repo_sync(args: argparse.Namespace) -> None:
         RepoRecord,
         load_repo_registry,
         now_utc_iso,
+        resolve_collection_pair,
         save_repo_registry,
         sync_repo,
     )
@@ -951,24 +989,37 @@ def cmd_repo_sync(args: argparse.Namespace) -> None:
             active_ref = sync_repo(destination=repo_dir, ref=args.ref or record.ref)
             generate_manuals = bool(args.generate_manuals or record.manuals_enabled)
             manuals_output = args.manuals_output or record.manuals_output
-
-            ingest_stats, manual_ingest_stats, manual_output_dir = _repo_ingest_and_manuals(
-                repo_dir=repo_dir,
+            collection, manuals_collection = resolve_collection_pair(
                 collection=record.collection,
+                manuals_collection=args.manuals_collection or record.manuals_collection,
+            )
+
+            (
+                ingest_stats,
+                manual_ingest_stats,
+                manual_output_dir,
+                resolved_manuals_collection,
+            ) = _repo_ingest_and_manuals(
+                repo_dir=repo_dir,
+                collection=collection,
                 project_root=project_root,
                 settings=settings,
                 skip_ingest=args.skip_ingest,
                 generate_manuals=generate_manuals,
+                manuals_collection=manuals_collection,
                 manuals_output=manuals_output,
+                reset_code_collection=args.reset_code_collection,
+                reset_manuals_collection=args.reset_manuals_collection,
             )
 
             updated = RepoRecord(
                 name=record.name,
                 url=record.url,
-                collection=record.collection,
+                collection=collection,
                 local_path=record.local_path,
                 ref=args.ref or record.ref,
                 manuals_enabled=generate_manuals,
+                manuals_collection=resolved_manuals_collection if generate_manuals else None,
                 manuals_output=str(manual_output_dir) if manual_output_dir else manuals_output,
                 added_at=record.added_at,
                 last_sync_at=now_utc_iso(),
@@ -980,6 +1031,7 @@ def cmd_repo_sync(args: argparse.Namespace) -> None:
                     "ref": active_ref,
                     "ingest_stats": ingest_stats,
                     "manual_ingest_stats": manual_ingest_stats,
+                    "manuals_collection": resolved_manuals_collection,
                 }
             )
 
@@ -1009,6 +1061,7 @@ def cmd_repo_sync(args: argparse.Namespace) -> None:
                             "indexed_docs": row["manual_ingest_stats"].indexed_docs,
                             "skipped_docs": row["manual_ingest_stats"].skipped_docs,
                             "total_chunks": row["manual_ingest_stats"].total_chunks,
+                            "collection": row["manuals_collection"],
                         }
                         if row["manual_ingest_stats"]
                         else None
@@ -1038,6 +1091,8 @@ def cmd_repo_sync(args: argparse.Namespace) -> None:
             if manual_ingest_stats
             else "skipped"
         )
+        if manual_ingest_stats and row.get("manuals_collection"):
+            manuals_text = f"{manuals_text} -> {row['manuals_collection']}"
         table.add_row(str(row["name"]), str(row["ref"]), ingest_text, manuals_text)
 
     console.print()
@@ -1074,6 +1129,7 @@ def cmd_repo_list(args: argparse.Namespace) -> None:
     table.add_column("Collection", style="green")
     table.add_column("Ref", style="yellow")
     table.add_column("Local Path", style="dim")
+    table.add_column("Manuals Collection", style="yellow")
     table.add_column("Last Sync", style="magenta")
     for name, record in sorted(repos.items()):
         table.add_row(
@@ -1081,11 +1137,247 @@ def cmd_repo_list(args: argparse.Namespace) -> None:
             record.collection,
             record.ref or "default",
             record.local_path,
+            record.manuals_collection or "n/a",
             record.last_sync_at or "never",
         )
 
     console.print()
     console.print(table)
+    console.print()
+
+
+def cmd_repo_migrate_collections(args: argparse.Namespace) -> None:
+    """Migrate tracked repos to split code/manual collection names."""
+    from services.cli.project import find_project_root
+    from services.cli.repositories import (
+        RepoRecord,
+        load_repo_registry,
+        now_utc_iso,
+        resolve_collection_pair,
+        save_repo_registry,
+    )
+    from services.core.config import get_settings
+    from services.core.database import get_connection, purge_collection_documents
+    from services.core.logging import setup_logging
+
+    project_root = find_project_root() or Path.cwd()
+    settings = get_settings()
+    setup_logging("ERROR")
+
+    repos = load_repo_registry(project_root)
+    if not repos:
+        console.print("[red]Error:[/red] No repos registered. Use [bold]ragops repo add[/bold].")
+        sys.exit(1)
+
+    if args.all:
+        target_names = sorted(repos.keys())
+    else:
+        if not args.name:
+            console.print("[red]Error:[/red] Provide repo name or use [bold]--all[/bold].")
+            sys.exit(1)
+        if args.name not in repos:
+            console.print(f"[red]Error:[/red] Unknown repo '{args.name}'.")
+            sys.exit(1)
+        target_names = [args.name]
+
+    plans: list[dict[str, object]] = []
+    for name in target_names:
+        record = repos[name]
+        new_code, new_manuals = resolve_collection_pair(
+            collection=record.collection,
+            manuals_collection=args.manuals_collection or record.manuals_collection,
+        )
+        plans.append(
+            {
+                "name": name,
+                "old_code": record.collection,
+                "new_code": new_code,
+                "old_manuals": record.manuals_collection,
+                "new_manuals": new_manuals,
+                "changed": (record.collection != new_code)
+                or (record.manuals_collection != new_manuals),
+            }
+        )
+
+    if not args.apply:
+        table = Table(
+            title="🧭 Collection Migration Plan (dry-run)",
+            show_header=True,
+            header_style="bold cyan",
+        )
+        table.add_column("Repo", style="cyan")
+        table.add_column("Current Code", style="yellow")
+        table.add_column("Target Code", style="green")
+        table.add_column("Current Manuals", style="yellow")
+        table.add_column("Target Manuals", style="green")
+        table.add_column("Change", style="magenta")
+        for row in plans:
+            table.add_row(
+                str(row["name"]),
+                str(row["old_code"]),
+                str(row["new_code"]),
+                str(row["old_manuals"] or "n/a"),
+                str(row["new_manuals"]),
+                "yes" if row["changed"] else "no",
+            )
+        console.print()
+        console.print(table)
+        console.print(
+            "\n[dim]Run with --apply to execute migration."
+            " Add --purge-old to remove old mixed collection data.[/dim]\n"
+        )
+        return
+
+    results: list[dict[str, object]] = []
+    with console.status("[bold cyan]Migrating collections...[/bold cyan]", spinner="dots"):
+        for row in plans:
+            name = str(row["name"])
+            record = repos[name]
+            old_code = str(row["old_code"])
+            new_code = str(row["new_code"])
+            new_manuals = str(row["new_manuals"])
+            repo_dir = Path(record.local_path).expanduser().resolve()
+
+            generate_manuals = bool(args.generate_manuals or record.manuals_enabled)
+            manuals_output = args.manuals_output or record.manuals_output
+
+            ingest_stats = None
+            manual_ingest_stats = None
+            manual_output_dir = None
+            resolved_manuals_collection = record.manuals_collection
+
+            if bool(row["changed"]) or args.reindex:
+                (
+                    ingest_stats,
+                    manual_ingest_stats,
+                    manual_output_dir,
+                    resolved_manuals_collection,
+                ) = _repo_ingest_and_manuals(
+                    repo_dir=repo_dir,
+                    collection=new_code,
+                    project_root=project_root,
+                    settings=settings,
+                    skip_ingest=False,
+                    generate_manuals=generate_manuals,
+                    manuals_collection=new_manuals,
+                    manuals_output=manuals_output,
+                    reset_code_collection=args.reset_code_collection,
+                    reset_manuals_collection=args.reset_manuals_collection,
+                )
+
+            purged: list[dict[str, object]] = []
+            if args.purge_old and old_code != new_code:
+                conn = get_connection(settings)
+                try:
+                    summary = purge_collection_documents(conn, collection=old_code)
+                    purged.append({"collection": old_code, **summary})
+                finally:
+                    conn.close()
+
+            updated = RepoRecord(
+                name=record.name,
+                url=record.url,
+                collection=new_code,
+                local_path=record.local_path,
+                ref=record.ref,
+                manuals_enabled=generate_manuals,
+                manuals_collection=resolved_manuals_collection if generate_manuals else None,
+                manuals_output=str(manual_output_dir) if manual_output_dir else manuals_output,
+                added_at=record.added_at,
+                last_sync_at=now_utc_iso(),
+            )
+            repos[name] = updated
+            results.append(
+                {
+                    "name": name,
+                    "old_code": old_code,
+                    "new_code": new_code,
+                    "new_manuals": resolved_manuals_collection,
+                    "ingest_stats": ingest_stats,
+                    "manual_ingest_stats": manual_ingest_stats,
+                    "purged": purged,
+                }
+            )
+
+    registry_file = save_repo_registry(project_root, repos)
+
+    if args.json:
+        import json
+
+        payload = {
+            "status": "ok",
+            "registry": str(registry_file),
+            "results": [
+                {
+                    "name": row["name"],
+                    "old_code": row["old_code"],
+                    "new_code": row["new_code"],
+                    "new_manuals": row["new_manuals"],
+                    "ingest": (
+                        {
+                            "indexed_docs": row["ingest_stats"].indexed_docs,
+                            "skipped_docs": row["ingest_stats"].skipped_docs,
+                            "total_chunks": row["ingest_stats"].total_chunks,
+                        }
+                        if row["ingest_stats"]
+                        else None
+                    ),
+                    "manual_ingest": (
+                        {
+                            "indexed_docs": row["manual_ingest_stats"].indexed_docs,
+                            "skipped_docs": row["manual_ingest_stats"].skipped_docs,
+                            "total_chunks": row["manual_ingest_stats"].total_chunks,
+                        }
+                        if row["manual_ingest_stats"]
+                        else None
+                    ),
+                    "purged": row["purged"],
+                }
+                for row in results
+            ],
+        }
+        print(json.dumps(payload, indent=2))
+        return
+
+    table = Table(title="✅ Collection Migration", show_header=True, header_style="bold cyan")
+    table.add_column("Repo", style="cyan")
+    table.add_column("Code Collection", style="green")
+    table.add_column("Manuals Collection", style="yellow")
+    table.add_column("Ingest", style="magenta")
+    table.add_column("Purged", style="red")
+    for row in results:
+        ingest_stats = row["ingest_stats"]
+        manual_ingest_stats = row["manual_ingest_stats"]
+        ingest_text_parts: list[str] = []
+        if ingest_stats:
+            ingest_text_parts.append(
+                f"code: {ingest_stats.indexed_docs} idx/{ingest_stats.total_chunks} chunks"
+            )
+        if manual_ingest_stats:
+            ingest_text_parts.append(
+                f"manuals: {manual_ingest_stats.indexed_docs} idx/"
+                f"{manual_ingest_stats.total_chunks} chunks"
+            )
+        ingest_text = " | ".join(ingest_text_parts) if ingest_text_parts else "skipped"
+        purged_rows = row["purged"]
+        if purged_rows:
+            purged_text = ", ".join(
+                f"{p['collection']} ({p['documents_deleted']} docs/{p['chunks_deleted']} chunks)"
+                for p in purged_rows
+            )
+        else:
+            purged_text = "none"
+        table.add_row(
+            str(row["name"]),
+            str(row["new_code"]),
+            str(row["new_manuals"] or "n/a"),
+            ingest_text,
+            purged_text,
+        )
+
+    console.print()
+    console.print(table)
+    console.print(f"[dim]Registry updated: {registry_file}[/dim]")
     console.print()
 
 
@@ -1456,9 +1748,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Register/clone repo without ingesting",
     )
     p_repo_add.add_argument(
+        "--reset-code-collection",
+        action="store_true",
+        help="Purge target code collection before ingesting",
+    )
+    p_repo_add.add_argument(
+        "--reset-manuals-collection",
+        action="store_true",
+        help="Purge target manuals collection before ingesting manuals",
+    )
+    p_repo_add.add_argument(
         "--generate-manuals",
         action="store_true",
         help="Generate onboarding manuals after clone/sync",
+    )
+    p_repo_add.add_argument(
+        "--manuals-collection",
+        help="Collection for generated manuals (default: <collection>_manuals)",
     )
     p_repo_add.add_argument("--manuals-output", help="Manuals output directory")
     p_repo_add.add_argument(
@@ -1479,13 +1785,74 @@ def build_parser() -> argparse.ArgumentParser:
         help="Update git clone but skip ingest",
     )
     p_repo_sync.add_argument(
+        "--reset-code-collection",
+        action="store_true",
+        help="Purge target code collection before ingesting",
+    )
+    p_repo_sync.add_argument(
+        "--reset-manuals-collection",
+        action="store_true",
+        help="Purge target manuals collection before ingesting manuals",
+    )
+    p_repo_sync.add_argument(
         "--generate-manuals",
         action="store_true",
         help="Generate manuals during sync",
     )
+    p_repo_sync.add_argument(
+        "--manuals-collection",
+        help="Collection for generated manuals (default: stored value or <collection>_manuals)",
+    )
     p_repo_sync.add_argument("--manuals-output", help="Manuals output directory")
     p_repo_sync.add_argument("--json", action="store_true", help="Output raw JSON")
     p_repo_sync.set_defaults(func=cmd_repo_sync)
+
+    p_repo_migrate = repo_sub.add_parser(
+        "migrate-collections",
+        help="Split existing tracked repos into <collection>_code and <collection>_manuals",
+    )
+    p_repo_migrate.add_argument("name", nargs="?", help="Repo key from registry")
+    p_repo_migrate.add_argument("--all", action="store_true", help="Migrate all repositories")
+    p_repo_migrate.add_argument(
+        "--manuals-collection",
+        help="Override manuals collection for target repo(s)",
+    )
+    p_repo_migrate.add_argument(
+        "--manuals-output",
+        help="Manuals output directory used during migration reindex",
+    )
+    p_repo_migrate.add_argument(
+        "--generate-manuals",
+        action="store_true",
+        help="Force manuals generation during migration",
+    )
+    p_repo_migrate.add_argument(
+        "--reindex",
+        action="store_true",
+        help="Reindex even when names are already normalized",
+    )
+    p_repo_migrate.add_argument(
+        "--purge-old",
+        action="store_true",
+        help="Delete old collection documents/chunks after successful migration",
+    )
+    p_repo_migrate.add_argument(
+        "--reset-code-collection",
+        action="store_true",
+        help="Purge target code collection before reindexing",
+    )
+    p_repo_migrate.add_argument(
+        "--reset-manuals-collection",
+        action="store_true",
+        help="Purge target manuals collection before reindexing manuals",
+    )
+    p_repo_migrate.add_argument(
+        "--apply",
+        action="store_true",
+        help="Execute migration (default is dry-run)",
+    )
+    p_repo_migrate.add_argument("--json", action="store_true", help="Output raw JSON")
+    p_repo_migrate.set_defaults(func=cmd_repo_migrate_collections)
 
     p_repo_list = repo_sub.add_parser("list", help="List registered repositories")
     p_repo_list.add_argument("--json", action="store_true", help="Output raw JSON")

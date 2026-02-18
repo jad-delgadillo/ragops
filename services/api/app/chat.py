@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 from uuid import uuid4
@@ -59,15 +60,24 @@ HIGH_LEVEL_PATH_HINTS = (
     "architecture",
     ".md",
 )
+LOW_VALUE_PATH_HINTS = (
+    ".egg-info/",
+    ".egg-info\\",
+    "build/package/",
+    "build/package\\",
+    "__pycache__/",
+    "__pycache__\\",
+    ".pytest_cache/",
+    ".pytest_cache\\",
+    ".ruff_cache/",
+    ".ruff_cache\\",
+)
 CODE_DUMP_MARKERS = (
     "def ",
     "class ",
     "import ",
     "from ",
     "return ",
-    "if ",
-    "for ",
-    "while ",
     "try:",
     "except",
     "dependencies = [",
@@ -201,10 +211,32 @@ def is_onboarding_question(question: str) -> bool:
     return any(token in text for token in ONBOARDING_TERMS)
 
 
-def source_bonus(source: str, *, broad_onboarding: bool) -> float:
+def extract_file_hints(question: str) -> set[str]:
+    """Extract explicit filename hints from question text."""
+    matches = re.findall(r"([a-zA-Z0-9_.-]+\.[a-zA-Z0-9_-]+)", question.lower())
+    return {m for m in matches if len(m) >= 4}
+
+
+def is_low_value_source(source: str) -> bool:
+    """Return True for generated/cache paths that should be demoted."""
+    src = source.lower()
+    return any(hint in src for hint in LOW_VALUE_PATH_HINTS)
+
+
+def source_bonus(
+    source: str,
+    *,
+    broad_onboarding: bool,
+    file_hints: set[str] | None = None,
+) -> float:
     """Compute source-based rerank bonus for onboarding questions."""
     src = source.lower()
     bonus = 0.0
+    hints = file_hints or set()
+    if hints and any(hint in src for hint in hints):
+        bonus += 0.25
+    if is_low_value_source(src):
+        bonus -= 0.30
     if broad_onboarding:
         if any(hint in src for hint in PRIORITY_PATH_HINTS):
             bonus += 0.12
@@ -232,29 +264,74 @@ def rerank_chunks(
 ) -> list[dict[str, object]]:
     """Rerank raw vector results with lightweight onboarding-aware source priors."""
     broad = is_onboarding_question(question)
+    file_hints = extract_file_hints(question)
     scored: list[tuple[float, dict[str, object]]] = []
     for chunk in chunks:
         similarity = float(chunk.get("similarity", 0.0))
         source = str(chunk.get("source_file", chunk.get("s3_key", "unknown")))
-        score = similarity + source_bonus(source, broad_onboarding=broad)
+        score = similarity + source_bonus(
+            source,
+            broad_onboarding=broad,
+            file_hints=file_hints,
+        )
         scored.append((score, chunk))
     scored.sort(key=lambda item: item[0], reverse=True)
+
+    preferred = [
+        (score, chunk)
+        for score, chunk in scored
+        if not is_low_value_source(str(chunk.get("source_file", chunk.get("s3_key", "unknown"))))
+    ]
+    ranked_pool = preferred if len(preferred) >= top_k else scored
+    ranked_chunks = [chunk for _, chunk in ranked_pool]
+
+    def _chunk_key(chunk: dict[str, object]) -> tuple[object, object, object, object]:
+        return (
+            chunk.get("source_file", chunk.get("s3_key", "unknown")),
+            chunk.get("line_start"),
+            chunk.get("line_end"),
+            chunk.get("chunk_index"),
+        )
+
+    def _select_diverse(candidates: list[dict[str, object]], limit: int) -> list[dict[str, object]]:
+        selected: list[dict[str, object]] = []
+        seen_sources: set[str] = set()
+        seen_chunks: set[tuple[object, object, object, object]] = set()
+        for chunk in candidates:
+            source = str(chunk.get("source_file", chunk.get("s3_key", "unknown"))).lower()
+            key = _chunk_key(chunk)
+            if source in seen_sources or key in seen_chunks:
+                continue
+            selected.append(chunk)
+            seen_sources.add(source)
+            seen_chunks.add(key)
+            if len(selected) >= limit:
+                return selected
+        for chunk in candidates:
+            key = _chunk_key(chunk)
+            if key in seen_chunks:
+                continue
+            selected.append(chunk)
+            seen_chunks.add(key)
+            if len(selected) >= limit:
+                break
+        return selected
+
     if not broad:
-        return [chunk for _, chunk in scored[:top_k]]
+        return _select_diverse(ranked_chunks, top_k)
 
     high_level = []
     code_level = []
-    for _, chunk in scored:
+    for chunk in ranked_chunks:
         source = str(chunk.get("source_file", chunk.get("s3_key", "unknown")))
         if is_high_level_source(source):
             high_level.append(chunk)
         else:
             code_level.append(chunk)
-
-    selected = high_level[:top_k]
-    if len(selected) < top_k:
-        selected.extend(code_level[: top_k - len(selected)])
-    return selected
+    minimum_docs = max(2, min(top_k, 3))
+    if len(high_level) >= minimum_docs:
+        return _select_diverse(high_level, top_k)
+    return _select_diverse(high_level + code_level, top_k)
 
 
 def build_context_snippets(
@@ -316,11 +393,25 @@ def looks_like_code_dump(answer: str) -> bool:
     lines = [line for line in text.splitlines() if line.strip()]
     if len(lines) <= 3:
         return False
+    if "```" in text:
+        return True
     marker_hits = sum(normalized.count(marker) for marker in CODE_DUMP_MARKERS)
-    code_punct = sum(text.count(ch) for ch in "{}[]();`")
-    has_long_indented_block = any(line.startswith("    ") for line in lines[:20])
-    likely_code = marker_hits >= 4 or (marker_hits >= 2 and has_long_indented_block)
-    strong_structure = code_punct >= 4 or has_long_indented_block
+    indented_lines = sum(1 for line in lines if line.startswith(("    ", "\t")))
+    assignment_like_lines = sum(
+        1 for line in lines if re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*\s*=\s*.+$", line.strip())
+    )
+    code_punct = sum(text.count(ch) for ch in "{}[]();")
+    likely_code = (
+        marker_hits >= 6
+        or (marker_hits >= 4 and indented_lines >= 2)
+        or (
+            marker_hits >= 2
+            and ("def " in normalized or "class " in normalized)
+            and indented_lines >= 2
+        )
+        or (assignment_like_lines >= 4 and marker_hits >= 1)
+    )
+    strong_structure = code_punct >= 4 or indented_lines >= 2 or assignment_like_lines >= 4
     return bool(likely_code and strong_structure)
 
 

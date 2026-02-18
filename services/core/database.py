@@ -161,6 +161,43 @@ def upsert_document(
     return row["id"]  # type: ignore[index]
 
 
+def purge_collection_documents(
+    conn: psycopg.Connection,
+    *,
+    collection: str,
+) -> dict[str, int]:
+    """Delete documents/chunks for a collection and return deleted counts."""
+    chunk_row = conn.execute(
+        """
+        SELECT COUNT(*) AS chunk_count
+        FROM chunks c
+        JOIN documents d ON d.id = c.document_id
+        WHERE d.collection = %s
+        """,
+        (collection,),
+    ).fetchone()
+    doc_row = conn.execute(
+        """
+        SELECT COUNT(*) AS doc_count
+        FROM documents
+        WHERE collection = %s
+        """,
+        (collection,),
+    ).fetchone()
+    conn.execute(
+        """
+        DELETE FROM documents
+        WHERE collection = %s
+        """,
+        (collection,),
+    )
+    conn.commit()
+    return {
+        "documents_deleted": int(doc_row["doc_count"]) if doc_row else 0,
+        "chunks_deleted": int(chunk_row["chunk_count"]) if chunk_row else 0,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Chunk operations
 # ---------------------------------------------------------------------------
@@ -502,6 +539,152 @@ def summarize_feedback(
         "negative": negative,
         "positive_rate": round(positive_rate, 4),
     }
+
+
+# ---------------------------------------------------------------------------
+# Repo onboarding job operations
+# ---------------------------------------------------------------------------
+
+
+def ensure_repo_onboarding_jobs_table(conn: psycopg.Connection) -> None:
+    """Create repo onboarding jobs table if it does not exist."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS repo_onboarding_jobs (
+            job_id           VARCHAR(64) PRIMARY KEY,
+            collection       VARCHAR(128) NOT NULL DEFAULT 'default',
+            principal        VARCHAR(128) NOT NULL DEFAULT 'unknown',
+            status           VARCHAR(16) NOT NULL DEFAULT 'queued',
+            request_payload  JSONB NOT NULL DEFAULT '{}'::jsonb,
+            result           JSONB DEFAULT '{}'::jsonb,
+            error            TEXT,
+            created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            started_at       TIMESTAMPTZ,
+            finished_at      TIMESTAMPTZ,
+            CONSTRAINT repo_onboarding_jobs_status_check
+                CHECK (status IN ('queued', 'running', 'succeeded', 'failed'))
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_repo_onboarding_jobs_collection_created
+            ON repo_onboarding_jobs (collection, created_at DESC)
+        """
+    )
+    conn.commit()
+
+
+def create_repo_onboarding_job(
+    conn: psycopg.Connection,
+    *,
+    job_id: str,
+    collection: str,
+    principal: str,
+    request_payload: dict[str, Any],
+) -> None:
+    """Insert a queued repo onboarding job."""
+    conn.execute(
+        """
+        INSERT INTO repo_onboarding_jobs (
+            job_id, collection, principal, status, request_payload
+        )
+        VALUES (%s, %s, %s, 'queued', %s::jsonb)
+        """,
+        (job_id, collection, principal, json.dumps(request_payload)),
+    )
+    conn.commit()
+
+
+def get_repo_onboarding_job(
+    conn: psycopg.Connection,
+    *,
+    job_id: str,
+) -> dict[str, Any] | None:
+    """Fetch repo onboarding job by id."""
+    row = conn.execute(
+        """
+        SELECT
+            job_id,
+            collection,
+            principal,
+            status,
+            request_payload,
+            result,
+            error,
+            created_at,
+            updated_at,
+            started_at,
+            finished_at
+        FROM repo_onboarding_jobs
+        WHERE job_id = %s
+        """,
+        (job_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def mark_repo_onboarding_job_running(conn: psycopg.Connection, *, job_id: str) -> None:
+    """Mark repo onboarding job as running."""
+    conn.execute(
+        """
+        UPDATE repo_onboarding_jobs
+        SET
+            status = 'running',
+            error = NULL,
+            started_at = COALESCE(started_at, NOW()),
+            updated_at = NOW()
+        WHERE job_id = %s
+        """,
+        (job_id,),
+    )
+    conn.commit()
+
+
+def mark_repo_onboarding_job_succeeded(
+    conn: psycopg.Connection,
+    *,
+    job_id: str,
+    result: dict[str, Any],
+) -> None:
+    """Mark repo onboarding job as succeeded with result payload."""
+    conn.execute(
+        """
+        UPDATE repo_onboarding_jobs
+        SET
+            status = 'succeeded',
+            result = %s::jsonb,
+            error = NULL,
+            finished_at = NOW(),
+            updated_at = NOW()
+        WHERE job_id = %s
+        """,
+        (json.dumps(result), job_id),
+    )
+    conn.commit()
+
+
+def mark_repo_onboarding_job_failed(
+    conn: psycopg.Connection,
+    *,
+    job_id: str,
+    error: str,
+) -> None:
+    """Mark repo onboarding job as failed with error message."""
+    conn.execute(
+        """
+        UPDATE repo_onboarding_jobs
+        SET
+            status = 'failed',
+            error = %s,
+            finished_at = NOW(),
+            updated_at = NOW()
+        WHERE job_id = %s
+        """,
+        (error[:4000], job_id),
+    )
+    conn.commit()
 
 
 # ---------------------------------------------------------------------------

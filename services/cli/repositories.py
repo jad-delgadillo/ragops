@@ -23,6 +23,7 @@ class RepoRecord:
     local_path: str
     ref: str | None = None
     manuals_enabled: bool = False
+    manuals_collection: str | None = None
     manuals_output: str | None = None
     added_at: str = ""
     last_sync_at: str = ""
@@ -35,6 +36,7 @@ class RepoRecord:
             "local_path": self.local_path,
             "ref": self.ref,
             "manuals_enabled": self.manuals_enabled,
+            "manuals_collection": self.manuals_collection,
             "manuals_output": self.manuals_output,
             "added_at": self.added_at,
             "last_sync_at": self.last_sync_at,
@@ -49,6 +51,9 @@ class RepoRecord:
             local_path=str(data.get("local_path", "")),
             ref=str(data["ref"]) if data.get("ref") else None,
             manuals_enabled=bool(data.get("manuals_enabled", False)),
+            manuals_collection=(
+                str(data["manuals_collection"]) if data.get("manuals_collection") else None
+            ),
             manuals_output=str(data["manuals_output"]) if data.get("manuals_output") else None,
             added_at=str(data.get("added_at", "")),
             last_sync_at=str(data.get("last_sync_at", "")),
@@ -131,6 +136,32 @@ def parse_github_repo_url(url: str) -> tuple[str, str, str]:
 def default_repo_name(owner: str, repo: str) -> str:
     """Build default registry key for a repository."""
     return f"{owner}-{repo}".lower()
+
+
+def resolve_collection_pair(
+    *,
+    collection: str,
+    manuals_collection: str | None = None,
+) -> tuple[str, str]:
+    """Return normalized code/manual collections for repo onboarding."""
+    normalized_collection = collection.strip()
+    if not normalized_collection:
+        raise ValueError("Collection name cannot be empty")
+
+    if normalized_collection.endswith("_code"):
+        code_collection = normalized_collection
+        base = normalized_collection[: -len("_code")]
+    else:
+        code_collection = f"{normalized_collection}_code"
+        base = normalized_collection
+
+    normalized_manuals = (manuals_collection or "").strip()
+    if normalized_manuals:
+        manual_collection = normalized_manuals
+    else:
+        manual_collection = f"{base}_manuals"
+
+    return code_collection, manual_collection
 
 
 def build_authenticated_clone_url(canonical_url: str, token: str | None) -> str:

@@ -16,7 +16,7 @@ from services.api.app.chat import (
     render_history,
     rerank_chunks,
 )
-from services.api.app.handler import _handle_chat, _handle_feedback
+from services.api.app.handler import _handle_chat, _handle_feedback, _handle_repo_onboard
 from services.core.config import Settings
 
 
@@ -129,6 +129,58 @@ def test_rerank_chunks_prioritizes_docs_for_broad_onboarding_questions() -> None
     assert ranked[0]["source_file"] == "README.md"
 
 
+def test_rerank_chunks_prefers_target_manual_filename_and_avoids_egg_info() -> None:
+    chunks = [
+        {
+            "source_file": "services/cli/docgen/manuals.py",
+            "similarity": 0.92,
+            "chunk_index": 1,
+            "content": "def _render_codebase_manual(...): ...",
+        },
+        {
+            "source_file": "manuals/CODEBASE_MANUAL.md",
+            "similarity": 0.78,
+            "chunk_index": 2,
+            "content": "Codebase Manual overview...",
+        },
+        {
+            "source_file": "ragops.egg-info/SOURCES.txt",
+            "similarity": 0.95,
+            "chunk_index": 3,
+            "content": "SOURCES list...",
+        },
+    ]
+    ranked = rerank_chunks("tell me about CODEBASE_MANUAL.md", chunks, top_k=2)
+    assert ranked[0]["source_file"] == "manuals/CODEBASE_MANUAL.md"
+    sources = [str(item["source_file"]) for item in ranked]
+    assert "ragops.egg-info/SOURCES.txt" not in sources
+
+
+def test_rerank_chunks_diversifies_duplicate_source_hits() -> None:
+    chunks = [
+        {"source_file": "services/cli/main.py", "similarity": 0.90, "chunk_index": 1},
+        {"source_file": "services/cli/main.py", "similarity": 0.89, "chunk_index": 2},
+        {"source_file": "docs/architecture.md", "similarity": 0.88, "chunk_index": 3},
+    ]
+    ranked = rerank_chunks("what is this project architecture?", chunks, top_k=2)
+    sources = [str(item["source_file"]) for item in ranked]
+    assert "services/cli/main.py" in sources
+    assert "docs/architecture.md" in sources
+
+
+def test_rerank_chunks_for_broad_questions_prefers_docs_only_when_available() -> None:
+    chunks = [
+        {"source_file": "docs/architecture.md", "similarity": 0.82, "chunk_index": 1},
+        {"source_file": "docs/user-guide.md", "similarity": 0.80, "chunk_index": 2},
+        {"source_file": "manuals/CODEBASE_MANUAL.md", "similarity": 0.79, "chunk_index": 3},
+        {"source_file": "services/cli/main.py", "similarity": 0.93, "chunk_index": 4},
+    ]
+    ranked = rerank_chunks("what is this project about?", chunks, top_k=3)
+    sources = [str(item["source_file"]) for item in ranked]
+    assert all(source.endswith(".md") for source in sources)
+    assert "services/cli/main.py" not in sources
+
+
 def test_handle_chat_returns_400_for_invalid_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = Settings(_env_file=None, OPENAI_API_KEY="test")
     monkeypatch.setattr("services.api.app.handler.get_settings", lambda: settings)
@@ -233,3 +285,132 @@ def test_handle_feedback_success_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     body = json.loads(response["body"])
     assert body["status"] == "ok"
     assert body["feedback_id"] == 99
+
+
+def test_handle_repo_onboard_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(_env_file=None, OPENAI_API_KEY="test", REPO_ONBOARDING_ENABLED="false")
+    monkeypatch.setattr("services.api.app.handler.get_settings", lambda: settings)
+    event = {"body": json.dumps({"repo_url": "https://github.com/openai/openai-python"})}
+    response = _handle_repo_onboard(event)
+    assert response["statusCode"] == 403
+    body = json.loads(response["body"])
+    assert "disabled" in body["error"].lower()
+
+
+def test_handle_repo_onboard_success_shape(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(_env_file=None, OPENAI_API_KEY="test", REPO_ONBOARDING_ENABLED="true")
+    monkeypatch.setattr("services.api.app.handler.get_settings", lambda: settings)
+
+    class _Result:
+        def to_dict(self) -> dict[str, Any]:
+            return {
+                "name": "openai-openai-python",
+                "url": "https://github.com/openai/openai-python.git",
+                "ref": "main",
+                "local_path": "/tmp/ragops/repos/openai-openai-python",
+                "collection": "openai-openai-python_code",
+                "manuals_collection": "openai-openai-python_manuals",
+                "generate_manuals": True,
+                "ingest": {"indexed_docs": 10, "skipped_docs": 0, "total_chunks": 100},
+                "manual_ingest": {"indexed_docs": 3, "skipped_docs": 0, "total_chunks": 12},
+                "manuals_output": "/tmp/ragops/manuals/openai-openai-python",
+            }
+
+    monkeypatch.setattr("services.api.app.handler.onboard_github_repo", lambda **_: _Result())
+    event = {"body": json.dumps({"repo_url": "https://github.com/openai/openai-python"})}
+    response = _handle_repo_onboard(event)
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["status"] == "ok"
+    assert body["collection"] == "openai-openai-python_code"
+
+
+def test_handle_repo_onboard_requires_auth_outside_local(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(
+        _env_file=None,
+        OPENAI_API_KEY="test",
+        REPO_ONBOARDING_ENABLED="true",
+        ENVIRONMENT="dev",
+        API_AUTH_ENABLED="false",
+    )
+    monkeypatch.setattr("services.api.app.handler.get_settings", lambda: settings)
+    event = {"body": json.dumps({"repo_url": "https://github.com/openai/openai-python"})}
+    response = _handle_repo_onboard(event)
+    assert response["statusCode"] == 403
+    body = json.loads(response["body"])
+    assert "api key auth" in body["error"].lower()
+
+
+def test_handle_repo_onboard_async_queues_job(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(_env_file=None, OPENAI_API_KEY="test", REPO_ONBOARDING_ENABLED="true")
+    monkeypatch.setattr("services.api.app.handler.get_settings", lambda: settings)
+
+    class _DummyConn:
+        def close(self) -> None:
+            return None
+
+    captured: dict[str, Any] = {}
+
+    def _fake_create_job(conn: Any, **kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr("services.api.app.handler.get_connection", lambda _: _DummyConn())
+    monkeypatch.setattr(
+        "services.api.app.handler.ensure_repo_onboarding_jobs_table",
+        lambda _: None,
+    )
+    monkeypatch.setattr("services.api.app.handler.create_repo_onboarding_job", _fake_create_job)
+    monkeypatch.setattr("services.api.app.handler._dispatch_repo_onboard_job", lambda **_: True)
+
+    event = {
+        "body": json.dumps(
+            {
+                "repo_url": "https://github.com/openai/openai-python",
+                "collection": "openai-python",
+                "async": True,
+            }
+        )
+    }
+    response = _handle_repo_onboard(event)
+    assert response["statusCode"] == 202
+    body = json.loads(response["body"])
+    assert body["status"] == "queued"
+    assert body["collection"] == "openai-python"
+    assert captured["collection"] == "openai-python"
+    assert captured["request_payload"]["repo_url"] == "https://github.com/openai/openai-python"
+
+
+def test_handle_repo_onboard_status_returns_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(_env_file=None, OPENAI_API_KEY="test", REPO_ONBOARDING_ENABLED="true")
+    monkeypatch.setattr("services.api.app.handler.get_settings", lambda: settings)
+
+    class _DummyConn:
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("services.api.app.handler.get_connection", lambda _: _DummyConn())
+    monkeypatch.setattr(
+        "services.api.app.handler.ensure_repo_onboarding_jobs_table",
+        lambda _: None,
+    )
+    monkeypatch.setattr(
+        "services.api.app.handler.get_repo_onboarding_job",
+        lambda _, job_id: {
+            "job_id": job_id,
+            "collection": "openai-python",
+            "status": "succeeded",
+            "error": None,
+            "created_at": None,
+            "started_at": None,
+            "finished_at": None,
+            "result": {"collection": "openai-python_code"},
+        },
+    )
+
+    event = {"body": json.dumps({"action": "status", "job_id": "job-123"})}
+    response = _handle_repo_onboard(event)
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["status"] == "succeeded"
+    assert body["job_id"] == "job-123"
+    assert body["result"]["collection"] == "openai-python_code"

@@ -78,7 +78,8 @@ The fastest way to get started is using Docker Compose.
 12. **Connect a GitHub Repo (clone + ingest + chat)**:
     ```bash
     python -m services.cli.main repo add https://github.com/<org>/<repo> --ref main --generate-manuals
-    python -m services.cli.main chat "What is this project about?" --collection <owner-repo>
+    python -m services.cli.main chat "What is this project about?" --collection <owner-repo>_code
+    # Generated manuals are isolated in: <owner-repo>_manuals
     ```
 
 ## 🏗️ Architecture

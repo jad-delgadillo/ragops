@@ -8,6 +8,7 @@ from services.cli.repositories import (
     default_repo_name,
     load_repo_registry,
     parse_github_repo_url,
+    resolve_collection_pair,
     save_repo_registry,
 )
 
@@ -39,6 +40,27 @@ def test_build_authenticated_clone_url() -> None:
     assert "@github.com/openai/openai-python.git" in authenticated
 
 
+def test_resolve_collection_pair_adds_suffixes() -> None:
+    code, manuals = resolve_collection_pair(collection="acme-paylink")
+    assert code == "acme-paylink_code"
+    assert manuals == "acme-paylink_manuals"
+
+
+def test_resolve_collection_pair_preserves_code_suffix() -> None:
+    code, manuals = resolve_collection_pair(collection="acme-paylink_code")
+    assert code == "acme-paylink_code"
+    assert manuals == "acme-paylink_manuals"
+
+
+def test_resolve_collection_pair_manual_override() -> None:
+    code, manuals = resolve_collection_pair(
+        collection="acme-paylink",
+        manuals_collection="acme-paylink_docs",
+    )
+    assert code == "acme-paylink_code"
+    assert manuals == "acme-paylink_docs"
+
+
 def test_repo_registry_round_trip(tmp_path: Path) -> None:
     project_root = tmp_path / "proj"
     project_root.mkdir()
@@ -51,6 +73,7 @@ def test_repo_registry_round_trip(tmp_path: Path) -> None:
             local_path=str(project_root / ".ragops" / "repos" / "openai-openai-python"),
             ref="main",
             manuals_enabled=True,
+            manuals_collection="openai-openai-python_manuals",
             manuals_output=str(project_root / "manuals" / "openai-openai-python"),
             added_at="2026-02-17T00:00:00+00:00",
             last_sync_at="2026-02-17T00:00:00+00:00",
@@ -64,3 +87,4 @@ def test_repo_registry_round_trip(tmp_path: Path) -> None:
     assert loaded_record.url == original["openai-openai-python"].url
     assert loaded_record.collection == original["openai-openai-python"].collection
     assert loaded_record.manuals_enabled
+    assert loaded_record.manuals_collection == "openai-openai-python_manuals"

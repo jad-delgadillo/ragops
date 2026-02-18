@@ -20,6 +20,13 @@ const el = {
   question: document.getElementById("question-input"),
   sendBtn: document.getElementById("send-btn"),
   newSessionBtn: document.getElementById("new-session-btn"),
+  repoUrl: document.getElementById("repo-url"),
+  repoRef: document.getElementById("repo-ref"),
+  repoCollection: document.getElementById("repo-collection"),
+  repoGenerateManuals: document.getElementById("repo-generate-manuals"),
+  repoResetCollections: document.getElementById("repo-reset-collections"),
+  repoOnboardBtn: document.getElementById("repo-onboard-btn"),
+  repoStatus: document.getElementById("repo-status"),
   tpl: document.getElementById("message-template"),
 };
 
@@ -34,6 +41,11 @@ function loadSettings() {
     el.mode.value = data.mode || "explain_like_junior";
     el.answerStyle.value = data.answerStyle || "concise";
     el.topK.value = String(data.topK || 5);
+    if (el.repoUrl) el.repoUrl.value = data.repoUrl || "";
+    if (el.repoRef) el.repoRef.value = data.repoRef || "main";
+    if (el.repoCollection) el.repoCollection.value = data.repoCollection || "";
+    if (el.repoGenerateManuals) el.repoGenerateManuals.checked = data.repoGenerateManuals !== false;
+    if (el.repoResetCollections) el.repoResetCollections.checked = data.repoResetCollections !== false;
     state.sessionId = data.sessionId || "";
     el.sessionId.value = state.sessionId;
   } catch (err) {
@@ -49,6 +61,11 @@ function saveSettings() {
     mode: el.mode.value,
     answerStyle: el.answerStyle.value,
     topK: Number(el.topK.value) || 5,
+    repoUrl: el.repoUrl ? el.repoUrl.value.trim() : "",
+    repoRef: el.repoRef ? el.repoRef.value.trim() : "main",
+    repoCollection: el.repoCollection ? el.repoCollection.value.trim() : "",
+    repoGenerateManuals: el.repoGenerateManuals ? el.repoGenerateManuals.checked : true,
+    repoResetCollections: el.repoResetCollections ? el.repoResetCollections.checked : true,
     sessionId: state.sessionId,
   };
   localStorage.setItem(storageKey, JSON.stringify(payload));
@@ -65,6 +82,17 @@ function setSending(active) {
   el.question.disabled = active;
 }
 
+function setRepoStatus(text, kind = "idle") {
+  if (!el.repoStatus) return;
+  el.repoStatus.textContent = text;
+  el.repoStatus.className = `status-pill ${kind}`;
+}
+
+function setOnboarding(active) {
+  if (!el.repoOnboardBtn) return;
+  el.repoOnboardBtn.disabled = active;
+}
+
 function endpoint(baseUrl, path) {
   const trimmed = baseUrl.trim().replace(/\/+$/, "");
   if (!trimmed) return path;
@@ -79,12 +107,115 @@ function baseHeaders() {
   return headers;
 }
 
+function jsonHeaders() {
+  return {
+    "Content-Type": "application/json",
+    ...baseHeaders(),
+  };
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function formatInlineMarkdown(text) {
+  return text
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+}
+
+function renderMarkdownSafe(rawText) {
+  const normalized = String(rawText || "").replace(/\r\n?/g, "\n").trim();
+  if (!normalized) return "";
+
+  const placeholders = [];
+  let escaped = escapeHtml(normalized);
+  escaped = escaped.replace(/```([a-zA-Z0-9_-]+)?\n([\s\S]*?)```/g, (_, _lang, code) => {
+    const token = `@@CODEBLOCK_${placeholders.length}@@`;
+    placeholders.push(`<pre class="md-code"><code>${code.trim()}</code></pre>`);
+    return token;
+  });
+
+  const lines = escaped.split("\n");
+  const html = [];
+  let listType = null;
+
+  function closeList() {
+    if (!listType) return;
+    html.push(listType === "ol" ? "</ol>" : "</ul>");
+    listType = null;
+  }
+
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      closeList();
+      return;
+    }
+    if (/^@@CODEBLOCK_\d+@@$/.test(trimmed)) {
+      closeList();
+      html.push(trimmed);
+      return;
+    }
+
+    const bullet = trimmed.match(/^[-*]\s+(.+)$/);
+    if (bullet) {
+      if (listType !== "ul") {
+        closeList();
+        html.push("<ul>");
+        listType = "ul";
+      }
+      html.push(`<li>${formatInlineMarkdown(bullet[1])}</li>`);
+      return;
+    }
+
+    const numbered = trimmed.match(/^(\d+)\.\s+(.+)$/);
+    if (numbered) {
+      if (listType !== "ol") {
+        closeList();
+        html.push("<ol>");
+        listType = "ol";
+      }
+      html.push(`<li>${formatInlineMarkdown(numbered[2])}</li>`);
+      return;
+    }
+
+    closeList();
+    html.push(`<p>${formatInlineMarkdown(trimmed)}</p>`);
+  });
+  closeList();
+
+  let rendered = html.join("");
+  placeholders.forEach((block, idx) => {
+    rendered = rendered.replace(`@@CODEBLOCK_${idx}@@`, block);
+  });
+  return rendered;
+}
+
+function compactSourceLabel(source) {
+  const normalized = String(source || "unknown").replaceAll("\\", "/");
+  const segments = normalized.split("/").filter(Boolean);
+  if (segments.length <= 3) return normalized;
+  return `.../${segments.slice(-3).join("/")}`;
+}
+
 function createMessage(role, text, meta = "") {
   const node = el.tpl.content.firstElementChild.cloneNode(true);
   node.classList.add(role);
   node.querySelector(".role").textContent = role;
   node.querySelector(".meta").textContent = meta;
-  node.querySelector(".content").textContent = text;
+  const content = node.querySelector(".content");
+  if (role === "assistant") {
+    content.innerHTML = renderMarkdownSafe(text);
+  } else {
+    content.textContent = text;
+  }
   return node;
 }
 
@@ -106,7 +237,9 @@ function renderCitations(node, citations) {
     const start = cite.line_start ?? "?";
     const end = cite.line_end ?? "?";
     const score = cite.similarity != null ? `${Math.round(cite.similarity * 100)}%` : "n/a";
-    li.textContent = `${src} (L${start}-L${end}, ${score})`;
+    const compact = compactSourceLabel(src);
+    li.title = src;
+    li.innerHTML = `<code>${escapeHtml(compact)}</code> (L${start}-L${end}, ${score})`;
     list.appendChild(li);
   });
 }
@@ -141,7 +274,7 @@ async function submitFeedback(payload, button) {
     if (comment) payload.comment = comment;
     const res = await fetch(endpoint(el.apiUrl.value, "/v1/feedback"), {
       method: "POST",
-      headers: baseHeaders(),
+      headers: jsonHeaders(),
       body: JSON.stringify(payload),
     });
     if (!res.ok) {
@@ -201,7 +334,7 @@ async function submitChat(question) {
 
   const res = await fetch(endpoint(el.apiUrl.value, "/v1/chat"), {
     method: "POST",
-    headers: baseHeaders(),
+    headers: jsonHeaders(),
     body: JSON.stringify(payload),
   });
   if (!res.ok) {
@@ -209,6 +342,71 @@ async function submitChat(question) {
     throw new Error(`Chat failed (${res.status}): ${text}`);
   }
   return res.json();
+}
+
+async function submitRepoOnboard() {
+  const repoUrl = el.repoUrl?.value.trim() || "";
+  if (!repoUrl) {
+    throw new Error("Set a GitHub repo URL first");
+  }
+  const payload = {
+    repo_url: repoUrl,
+    ref: el.repoRef?.value.trim() || "main",
+    collection: el.repoCollection?.value.trim() || undefined,
+    generate_manuals: el.repoGenerateManuals?.checked ?? true,
+    reset_code_collection: el.repoResetCollections?.checked ?? true,
+    reset_manuals_collection: el.repoResetCollections?.checked ?? true,
+    async: true,
+  };
+  const res = await fetch(endpoint(el.apiUrl.value, "/v1/repos/onboard"), {
+    method: "POST",
+    headers: jsonHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Repo onboarding failed (${res.status}): ${text}`);
+  }
+  return res.json();
+}
+
+async function fetchRepoOnboardStatus(jobId) {
+  const res = await fetch(endpoint(el.apiUrl.value, "/v1/repos/onboard"), {
+    method: "POST",
+    headers: jsonHeaders(),
+    body: JSON.stringify({
+      action: "status",
+      job_id: jobId,
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Repo onboarding status failed (${res.status}): ${text}`);
+  }
+  return res.json();
+}
+
+async function pollRepoOnboardJob(jobId) {
+  const maxAttempts = 120;
+  const delayMs = 3000;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+    const data = await fetchRepoOnboardStatus(jobId);
+    const status = String(data.status || "").toLowerCase();
+    if (status === "queued" || status === "running") {
+      setRepoStatus(`Onboarding (${status})`, "busy");
+      setStatus(`Repo onboarding (${status})`, "busy");
+      continue;
+    }
+    if (status === "succeeded") {
+      return data.result || {};
+    }
+    if (status === "failed") {
+      throw new Error(`Repo onboarding failed: ${data.error || "unknown error"}`);
+    }
+    throw new Error(`Unexpected onboarding status: ${status || "unknown"}`);
+  }
+  throw new Error(`Repo onboarding is still running. Job ID: ${jobId}`);
 }
 
 el.form.addEventListener("submit", async (event) => {
@@ -271,6 +469,52 @@ el.newSessionBtn.addEventListener("click", () => {
   setStatus("New session", "idle");
 });
 
+if (el.repoOnboardBtn) {
+  el.repoOnboardBtn.addEventListener("click", async () => {
+    if (!el.apiUrl.value.trim()) {
+      setRepoStatus("Set API URL first", "error");
+      return;
+    }
+    setOnboarding(true);
+    setRepoStatus("Onboarding...", "busy");
+    setStatus("Onboarding repo...", "busy");
+    try {
+      let data = await submitRepoOnboard();
+      if ((data.status || "").toLowerCase() === "queued" && data.job_id) {
+        setRepoStatus(`Queued (${data.job_id.slice(0, 8)}...)`, "busy");
+        setStatus("Repo onboarding queued", "busy");
+        data = await pollRepoOnboardJob(data.job_id);
+      }
+      if (data.collection) {
+        el.collection.value = data.collection;
+      }
+      if (data.manuals_collection && !el.repoCollection.value.trim()) {
+        el.repoCollection.value = data.name || "";
+      }
+      saveSettings();
+      const indexed = data.ingest?.indexed_docs ?? 0;
+      const chunks = data.ingest?.total_chunks ?? 0;
+      setRepoStatus(`Ready: ${data.collection}`, "idle");
+      setStatus(`Repo onboarded (${indexed} files, ${chunks} chunks)`, "idle");
+    } catch (err) {
+      console.error(err);
+      setRepoStatus("Failed", "error");
+      setStatus("Repo onboarding failed", "error");
+      addAssistantMessage({
+        question: "",
+        answer: String(err),
+        citations: [],
+        sessionId: state.sessionId,
+        turnIndex: null,
+        answerStyle: el.answerStyle.value || "concise",
+        contextSnippets: [],
+      });
+    } finally {
+      setOnboarding(false);
+    }
+  });
+}
+
 el.sessionId.addEventListener("change", () => {
   state.sessionId = el.sessionId.value.trim();
   saveSettings();
@@ -283,7 +527,14 @@ el.sessionId.addEventListener("change", () => {
   el.mode,
   el.answerStyle,
   el.topK,
-].forEach((node) => node.addEventListener("change", saveSettings));
+  el.repoUrl,
+  el.repoRef,
+  el.repoCollection,
+  el.repoGenerateManuals,
+  el.repoResetCollections,
+]
+  .filter(Boolean)
+  .forEach((node) => node.addEventListener("change", saveSettings));
 
 loadSettings();
 if (!el.apiUrl.value) {
@@ -296,3 +547,4 @@ if (!el.answerStyle.value) {
   el.answerStyle.value = "concise";
 }
 setStatus("Ready", "idle");
+setRepoStatus("Idle", "idle");

@@ -1,5 +1,5 @@
 # RAG Ops Platform
-.PHONY: dev dev-down ingest query chat feedback eval repo-add repo-sync repo-list frontend mock-api test lint fmt clean help
+.PHONY: dev dev-down ingest query chat feedback eval repo-add repo-sync repo-migrate repo-list frontend mock-api test lint fmt clean help
 
 # Use venv Python if available, otherwise system Python
 PYTHON := $(shell if [ -f .venv/bin/python ]; then echo .venv/bin/python; else echo python3; fi)
@@ -69,7 +69,10 @@ repo-add: ## Add GitHub repo (usage: make repo-add URL=... REF=main)
 		$${TOKEN:+--github-token $$TOKEN} \
 		$${CACHE_DIR:+--cache-dir $$CACHE_DIR} \
 		$${SKIP_INGEST:+--skip-ingest} \
+		$${RESET_CODE:+--reset-code-collection} \
+		$${RESET_MANUALS:+--reset-manuals-collection} \
 		$${GENERATE_MANUALS:+--generate-manuals} \
+		$${MANUALS_COLLECTION:+--manuals-collection $$MANUALS_COLLECTION} \
 		$${MANUALS_OUTPUT:+--manuals-output $$MANUALS_OUTPUT}
 
 repo-sync: ## Sync tracked repo(s) (usage: make repo-sync NAME=owner-repo or ALL=1)
@@ -78,8 +81,24 @@ repo-sync: ## Sync tracked repo(s) (usage: make repo-sync NAME=owner-repo or ALL
 		$${ALL:+--all} \
 		$${REF:+--ref $$REF} \
 		$${SKIP_INGEST:+--skip-ingest} \
+		$${RESET_CODE:+--reset-code-collection} \
+		$${RESET_MANUALS:+--reset-manuals-collection} \
 		$${GENERATE_MANUALS:+--generate-manuals} \
+		$${MANUALS_COLLECTION:+--manuals-collection $$MANUALS_COLLECTION} \
 		$${MANUALS_OUTPUT:+--manuals-output $$MANUALS_OUTPUT}
+
+repo-migrate: ## Migrate tracked repos to split collections (usage: make repo-migrate ALL=1 APPLY=1 PURGE_OLD=1)
+	$(PYTHON) -m services.cli.main repo migrate-collections \
+		$${NAME:-} \
+		$${ALL:+--all} \
+		$${MANUALS_COLLECTION:+--manuals-collection $$MANUALS_COLLECTION} \
+		$${MANUALS_OUTPUT:+--manuals-output $$MANUALS_OUTPUT} \
+		$${GENERATE_MANUALS:+--generate-manuals} \
+		$${REINDEX:+--reindex} \
+		$${PURGE_OLD:+--purge-old} \
+		$${RESET_CODE:+--reset-code-collection} \
+		$${RESET_MANUALS:+--reset-manuals-collection} \
+		$${APPLY:+--apply}
 
 repo-list: ## List tracked repositories
 	$(PYTHON) -m services.cli.main repo list

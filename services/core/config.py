@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY")
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
     groq_api_key: str = Field(default="", alias="GROQ_API_KEY")
+    github_token: str = Field(default="", alias="GITHUB_TOKEN")
 
     # --- Ollama (Local LLM) ---
     ollama_base_url: str = Field(default="http://localhost:11434", alias="OLLAMA_BASE_URL")
@@ -53,6 +54,14 @@ class Settings(BaseSettings):
     # --- App ---
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     environment: str = Field(default="local", alias="ENVIRONMENT")
+    repo_onboarding_enabled: bool = Field(default=False, alias="REPO_ONBOARDING_ENABLED")
+    repo_cache_dir: str = Field(default="", alias="REPO_CACHE_DIR")
+    repo_manuals_dir: str = Field(default="", alias="REPO_MANUALS_DIR")
+    repo_archive_max_mb: int = Field(default=80, alias="REPO_ARCHIVE_MAX_MB")
+    repo_onboarding_timeout_seconds: int = Field(
+        default=60,
+        alias="REPO_ONBOARDING_TIMEOUT_SECONDS",
+    )
 
     # --- Access control ---
     api_auth_enabled: bool = Field(default=False, alias="API_AUTH_ENABLED")

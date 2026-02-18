@@ -35,11 +35,122 @@ class IngestStats:
     errors: list[str] = field(default_factory=list)
 
 
+SUPPORTED_EXTENSIONS = {
+    # Docs
+    ".md",
+    ".txt",
+    ".rst",
+    ".adoc",
+    ".pdf",
+    ".docx",
+    # Code
+    ".py",
+    ".js",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".go",
+    ".rs",
+    ".java",
+    ".kt",
+    ".rb",
+    ".php",
+    ".swift",
+    ".c",
+    ".cpp",
+    ".h",
+    ".cs",
+    ".scala",
+    # Config
+    ".json",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".cfg",
+    ".csv",
+    ".env.example",
+}
+
+IGNORE_DIRS = {
+    "__pycache__",
+    "node_modules",
+    ".git",
+    ".venv",
+    "venv",
+    "dist",
+    "build",
+    ".next",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ragops",
+    ".terraform",
+}
+IGNORE_DIR_SUFFIXES = (".egg-info",)
+
+
+def should_ignore_dir_part(
+    part: str,
+    ignore_dirs: set[str],
+    *,
+    extra_ignore_dirs: set[str] | None = None,
+) -> bool:
+    """Return True when a directory segment should be excluded."""
+    if part in ignore_dirs:
+        return True
+    if extra_ignore_dirs and part in extra_ignore_dirs:
+        return True
+    return any(part.endswith(suffix) for suffix in IGNORE_DIR_SUFFIXES)
+
+
+def should_ignore_file(
+    file_path: Path,
+    root_dir: Path,
+    ignore_dirs: set[str],
+    *,
+    extra_ignore_dirs: set[str] | None = None,
+) -> bool:
+    """Return True if file should be ignored based on relative directory parts."""
+    relative_parts = file_path.relative_to(root_dir).parts
+    parent_parts = relative_parts[:-1]
+    return any(
+        should_ignore_dir_part(
+            part,
+            ignore_dirs,
+            extra_ignore_dirs=extra_ignore_dirs,
+        )
+        for part in parent_parts
+    )
+
+
+def collect_ingest_files(
+    directory: Path,
+    *,
+    extra_ignore_dirs: set[str] | None = None,
+) -> list[Path]:
+    """Collect files eligible for ingestion under the provided directory."""
+    files: list[Path] = []
+    for candidate in directory.rglob("*"):
+        if not candidate.is_file():
+            continue
+        if candidate.suffix.lower() not in SUPPORTED_EXTENSIONS:
+            continue
+        if should_ignore_file(
+            candidate,
+            directory,
+            IGNORE_DIRS,
+            extra_ignore_dirs=extra_ignore_dirs,
+        ):
+            continue
+        files.append(candidate)
+    return files
+
+
 def ingest_local_directory(
     directory: str | Path,
     embedding_provider: EmbeddingProvider,
     collection: str = "default",
     settings: Settings | None = None,
+    extra_ignore_dirs: set[str] | None = None,
 ) -> IngestStats:
     """Ingest all text files from a local directory.
 
@@ -48,6 +159,7 @@ def ingest_local_directory(
         embedding_provider: Provider to generate embeddings.
         collection: Collection name for grouping documents.
         settings: Optional settings override.
+        extra_ignore_dirs: Optional additional relative directories to ignore.
 
     Returns:
         IngestStats with counts and timing.
@@ -61,65 +173,8 @@ def ingest_local_directory(
         stats.errors.append(f"Directory not found: {directory}")
         return stats
 
-    # Collect text files
-    extensions = {
-        # Docs
-        ".md",
-        ".txt",
-        ".rst",
-        ".adoc",
-        ".pdf",
-        ".docx",
-        # Code
-        ".py",
-        ".js",
-        ".ts",
-        ".tsx",
-        ".jsx",
-        ".go",
-        ".rs",
-        ".java",
-        ".kt",
-        ".rb",
-        ".php",
-        ".swift",
-        ".c",
-        ".cpp",
-        ".h",
-        ".cs",
-        ".scala",
-        # Config
-        ".json",
-        ".yaml",
-        ".yml",
-        ".toml",
-        ".cfg",
-        ".csv",
-        ".env.example",
-    }
-    # Patterns to ignore
-    ignore_dirs = {
-        "__pycache__",
-        "node_modules",
-        ".git",
-        ".venv",
-        "venv",
-        "dist",
-        "build",
-        ".next",
-        ".pytest_cache",
-        ".mypy_cache",
-        ".ragops",
-        ".terraform",
-        ".egg-info",
-    }
-    files = [
-        f
-        for f in dir_path.rglob("*")
-        if f.is_file()
-        and f.suffix.lower() in extensions
-        and not any(ignore in f.parts for ignore in ignore_dirs)
-    ]
+    # Collect text/code/config files with relative ignore rules
+    files = collect_ingest_files(dir_path, extra_ignore_dirs=extra_ignore_dirs)
 
     if not files:
         logger.warning("No text files found in %s", directory)

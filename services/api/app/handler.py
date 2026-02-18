@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any
+from uuid import uuid4
+
+try:
+    import boto3
+except Exception:  # pragma: no cover - boto3 exists in Lambda runtime
+    boto3 = None
 
 from services.api.app.access import AccessDecision, authorize
 from services.api.app.chat import (
@@ -16,10 +23,16 @@ from services.api.app.chat import (
 from services.api.app.retriever import QueryResult, query
 from services.core.config import get_settings
 from services.core.database import (
+    create_repo_onboarding_job,
     ensure_feedback_table,
+    ensure_repo_onboarding_jobs_table,
     get_connection,
+    get_repo_onboarding_job,
     health_check,
     insert_feedback,
+    mark_repo_onboarding_job_failed,
+    mark_repo_onboarding_job_running,
+    mark_repo_onboarding_job_succeeded,
     validate_embedding_dimension,
 )
 from services.core.logging import set_request_id, setup_logging
@@ -32,6 +45,11 @@ COMMON_CORS_HEADERS = {
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 }
 
+try:
+    from services.api.app.repo_onboarding import onboard_github_repo
+except Exception:  # pragma: no cover - lazy fallback when optional deps are absent
+    onboard_github_repo = None
+
 
 def lambda_handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
     """AWS Lambda entry point for query API.
@@ -40,11 +58,15 @@ def lambda_handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]
         POST /v1/query  → query handler
         POST /v1/chat   → conversational query handler
         POST /v1/feedback → answer quality feedback
+        POST /v1/repos/onboard → clone/index GitHub repo into collections
         GET  /health    → health check
     """
     settings = get_settings()
     setup_logging(settings.log_level)
     set_request_id(event.get("requestContext", {}).get("requestId"))
+
+    if event.get("internal_action") == "repo_onboard_job":
+        return _handle_repo_onboard_job_event(event)
 
     # Determine route
     path = event.get("path", event.get("rawPath", ""))
@@ -70,6 +92,7 @@ def lambda_handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]
                         "query": "POST /v1/query",
                         "chat": "POST /v1/chat",
                         "feedback": "POST /v1/feedback",
+                        "repo_onboard": "POST /v1/repos/onboard",
                         "ingest": "POST /v1/ingest",
                     },
                     "documentation": "See USER_GUIDE.md for usage details.",
@@ -87,6 +110,8 @@ def lambda_handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]
         return _with_cors(_handle_chat(event))
     if method == "POST" and "/v1/feedback" in path:
         return _with_cors(_handle_feedback(event))
+    if method == "POST" and "/v1/repos/onboard" in path:
+        return _with_cors(_handle_repo_onboard(event))
 
     return _with_cors(
         {
@@ -351,6 +376,332 @@ def _handle_feedback(event: dict[str, Any]) -> dict[str, Any]:
             "statusCode": 500,
             "body": json.dumps({"error": str(exc)}),
         }
+
+
+def _as_bool(value: Any, *, default: bool = False) -> bool:
+    """Normalize booleans from JSON payload values."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _handle_repo_onboard(event: dict[str, Any]) -> dict[str, Any]:
+    """Handle POST /v1/repos/onboard."""
+    settings = get_settings()
+    if not settings.repo_onboarding_enabled:
+        return {
+            "statusCode": 403,
+            "body": json.dumps(
+                {
+                    "error": (
+                        "Repo onboarding endpoint is disabled. "
+                        "Set REPO_ONBOARDING_ENABLED=true."
+                    ),
+                }
+            ),
+        }
+    if not settings.api_auth_enabled and settings.environment.lower() not in {"local"}:
+        return {
+            "statusCode": 403,
+            "body": json.dumps(
+                {
+                    "error": (
+                        "Repo onboarding requires API key auth outside local mode. "
+                        "Set API_AUTH_ENABLED=true and provide X-API-Key."
+                    ),
+                }
+            ),
+        }
+
+    try:
+        body = json.loads(event.get("body", "{}")) if isinstance(event.get("body"), str) else event
+        action = str(body.get("action", "")).strip().lower()
+        if action == "status":
+            return _handle_repo_onboard_status(event, body, settings)
+
+        repo_url = str(body.get("repo_url", "")).strip()
+        if not repo_url:
+            return {
+                "statusCode": 400,
+                "body": json.dumps({"error": "Field 'repo_url' is required"}),
+            }
+        if len(repo_url) > 500:
+            return {
+                "statusCode": 400,
+                "body": json.dumps({"error": "Field 'repo_url' exceeds 500 characters"}),
+            }
+
+        collection = str(body.get("collection", "")).strip() or "default"
+        decision = _authorize(event, action="repo_manage", collection=collection)
+        if not decision.allowed:
+            return _forbidden(decision)
+
+        request_payload = {
+            "repo_url": repo_url,
+            "ref": str(body.get("ref", "")).strip() or None,
+            "name": str(body.get("name", "")).strip() or None,
+            "collection": collection,
+            "manuals_collection": str(body.get("manuals_collection", "")).strip() or None,
+            "generate_manuals": _as_bool(body.get("generate_manuals"), default=True),
+            "reset_code_collection": _as_bool(body.get("reset_code_collection"), default=True),
+            "reset_manuals_collection": _as_bool(
+                body.get("reset_manuals_collection"),
+                default=True,
+            ),
+        }
+        async_requested = _as_bool(
+            body.get("async"),
+            default=settings.environment.lower() not in {"local"},
+        )
+        if async_requested:
+            requested_job_id = str(body.get("job_id", "")).strip()
+            if requested_job_id and len(requested_job_id) > 64:
+                return {
+                    "statusCode": 400,
+                    "body": json.dumps({"error": "Field 'job_id' exceeds 64 characters"}),
+                }
+            job_id = requested_job_id or str(uuid4())
+            conn = get_connection(settings)
+            try:
+                ensure_repo_onboarding_jobs_table(conn)
+                create_repo_onboarding_job(
+                    conn,
+                    job_id=job_id,
+                    collection=collection,
+                    principal=decision.principal,
+                    request_payload=request_payload,
+                )
+            finally:
+                conn.close()
+
+            dispatched = _dispatch_repo_onboard_job(job_id=job_id, settings=settings)
+            if not dispatched:
+                if settings.environment.lower() not in {"local"}:
+                    return {
+                        "statusCode": 500,
+                        "body": json.dumps(
+                            {
+                                "error": (
+                                    "Failed to dispatch onboarding worker. "
+                                    "Check Lambda invoke permissions and worker function name."
+                                )
+                            }
+                        ),
+                    }
+                outcome = _run_repo_onboard_job(job_id=job_id, settings=settings)
+                if outcome["status"] == "succeeded":
+                    payload = dict(outcome.get("result", {}))
+                    payload.update(
+                        {
+                            "status": "ok",
+                            "principal": decision.principal,
+                            "job_id": job_id,
+                        }
+                    )
+                    return {
+                        "statusCode": 200,
+                        "body": json.dumps(payload),
+                    }
+                return {
+                    "statusCode": 500,
+                    "body": json.dumps({"error": outcome.get("error", "Onboarding failed")}),
+                }
+
+            return {
+                "statusCode": 202,
+                "body": json.dumps(
+                    {
+                        "status": "queued",
+                        "job_id": job_id,
+                        "collection": collection,
+                        "principal": decision.principal,
+                    }
+                ),
+            }
+
+        result = _execute_repo_onboard(request_payload=request_payload, settings=settings)
+        payload = result.to_dict()
+        payload.update({"status": "ok", "principal": decision.principal})
+        return {"statusCode": 200, "body": json.dumps(payload)}
+    except ValueError as exc:
+        return {
+            "statusCode": 400,
+            "body": json.dumps({"error": str(exc)}),
+        }
+    except Exception as exc:
+        logger.exception("Repo onboarding handler error")
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"error": str(exc)}),
+        }
+
+
+def _handle_repo_onboard_status(
+    event: dict[str, Any],
+    body: dict[str, Any],
+    settings: Any,
+) -> dict[str, Any]:
+    """Handle POST /v1/repos/onboard with action=status."""
+    job_id = str(body.get("job_id", "")).strip()
+    if not job_id:
+        return {
+            "statusCode": 400,
+            "body": json.dumps({"error": "Field 'job_id' is required for action=status"}),
+        }
+
+    conn = get_connection(settings)
+    try:
+        ensure_repo_onboarding_jobs_table(conn)
+        job = get_repo_onboarding_job(conn, job_id=job_id)
+    finally:
+        conn.close()
+
+    if not job:
+        return {
+            "statusCode": 404,
+            "body": json.dumps({"error": f"Repo onboarding job not found: {job_id}"}),
+        }
+
+    collection = str(job.get("collection", "default") or "default")
+    decision = _authorize(event, action="repo_manage", collection=collection)
+    if not decision.allowed:
+        return _forbidden(decision)
+
+    payload: dict[str, Any] = {
+        "status": str(job.get("status", "unknown")),
+        "job_id": job_id,
+        "collection": collection,
+        "principal": decision.principal,
+        "error": job.get("error"),
+        "created_at": str(job.get("created_at")) if job.get("created_at") else None,
+        "started_at": str(job.get("started_at")) if job.get("started_at") else None,
+        "finished_at": str(job.get("finished_at")) if job.get("finished_at") else None,
+    }
+    result = job.get("result")
+    if isinstance(result, dict) and result:
+        payload["result"] = result
+    return {
+        "statusCode": 200,
+        "body": json.dumps(payload),
+    }
+
+
+def _execute_repo_onboard(*, request_payload: dict[str, Any], settings: Any) -> Any:
+    """Run repo onboarding synchronously and return RepoOnboardingResult."""
+    onboard_fn = onboard_github_repo
+    if onboard_fn is None:
+        from services.api.app.repo_onboarding import onboard_github_repo as onboard_fn
+
+    return onboard_fn(
+        repo_url=str(request_payload.get("repo_url", "")).strip(),
+        settings=settings,
+        ref=request_payload.get("ref"),
+        name=request_payload.get("name"),
+        collection=request_payload.get("collection"),
+        manuals_collection=request_payload.get("manuals_collection"),
+        generate_manuals=bool(request_payload.get("generate_manuals", True)),
+        reset_code_collection=bool(request_payload.get("reset_code_collection", True)),
+        reset_manuals_collection=bool(request_payload.get("reset_manuals_collection", True)),
+    )
+
+
+def _resolve_repo_onboard_worker_function(settings: Any) -> str:
+    """Resolve Lambda function name that should process onboarding jobs."""
+    override = os.getenv("REPO_ONBOARDING_WORKER_FUNCTION", "").strip()
+    if override:
+        return override
+    current = os.getenv("AWS_LAMBDA_FUNCTION_NAME", "").strip()
+    if current.endswith("-query"):
+        return f"{current[:-6]}-ingest"
+    return ""
+
+
+def _dispatch_repo_onboard_job(*, job_id: str, settings: Any) -> bool:
+    """Dispatch onboarding job to worker Lambda asynchronously."""
+    worker_function = _resolve_repo_onboard_worker_function(settings)
+    if not worker_function or boto3 is None:
+        return False
+    try:
+        client = boto3.client("lambda", region_name=settings.aws_region or None)
+        client.invoke(
+            FunctionName=worker_function,
+            InvocationType="Event",
+            Payload=json.dumps(
+                {
+                    "internal_action": "repo_onboard_job",
+                    "job_id": job_id,
+                }
+            ).encode("utf-8"),
+        )
+        return True
+    except Exception:
+        logger.exception("Failed to dispatch repo onboarding job to worker Lambda")
+        return False
+
+
+def _run_repo_onboard_job(*, job_id: str, settings: Any) -> dict[str, Any]:
+    """Execute an already queued repo onboarding job and persist status."""
+    conn = get_connection(settings)
+    try:
+        ensure_repo_onboarding_jobs_table(conn)
+        job = get_repo_onboarding_job(conn, job_id=job_id)
+        if not job:
+            return {"status": "failed", "error": f"Job not found: {job_id}", "job_id": job_id}
+        status = str(job.get("status", ""))
+        if status == "succeeded":
+            return {"status": "succeeded", "job_id": job_id, "result": job.get("result")}
+        if status == "running":
+            return {"status": "running", "job_id": job_id}
+        mark_repo_onboarding_job_running(conn, job_id=job_id)
+        request_payload = job.get("request_payload")
+    finally:
+        conn.close()
+
+    if not isinstance(request_payload, dict):
+        error = "Stored request payload is invalid"
+        conn = get_connection(settings)
+        try:
+            ensure_repo_onboarding_jobs_table(conn)
+            mark_repo_onboarding_job_failed(conn, job_id=job_id, error=error)
+        finally:
+            conn.close()
+        return {"status": "failed", "job_id": job_id, "error": error}
+
+    try:
+        result = _execute_repo_onboard(request_payload=request_payload, settings=settings)
+        payload = result.to_dict()
+        conn = get_connection(settings)
+        try:
+            ensure_repo_onboarding_jobs_table(conn)
+            mark_repo_onboarding_job_succeeded(conn, job_id=job_id, result=payload)
+        finally:
+            conn.close()
+        return {"status": "succeeded", "job_id": job_id, "result": payload}
+    except Exception as exc:
+        logger.exception("Repo onboarding job failed: %s", job_id)
+        error = str(exc)
+        conn = get_connection(settings)
+        try:
+            ensure_repo_onboarding_jobs_table(conn)
+            mark_repo_onboarding_job_failed(conn, job_id=job_id, error=error)
+        finally:
+            conn.close()
+        return {"status": "failed", "job_id": job_id, "error": error}
+
+
+def _handle_repo_onboard_job_event(event: dict[str, Any]) -> dict[str, Any]:
+    """Handle async worker invocation for repo onboarding job execution."""
+    settings = get_settings()
+    job_id = str(event.get("job_id", "")).strip()
+    if not job_id:
+        return {"statusCode": 400, "body": json.dumps({"error": "Missing job_id"})}
+    result = _run_repo_onboard_job(job_id=job_id, settings=settings)
+    status_code = 200 if result.get("status") == "succeeded" else 500
+    return {"statusCode": status_code, "body": json.dumps(result)}
 
 
 def _authorize(event: dict[str, Any], *, action: str, collection: str) -> AccessDecision:

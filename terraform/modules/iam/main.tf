@@ -58,6 +58,14 @@ resource "aws_iam_role_policy" "query_lambda" {
           "logs:PutLogEvents"
         ]
         Resource = "arn:aws:logs:*:*:*"
+      },
+      {
+        Sid    = "InvokeIngestLambda"
+        Effect = "Allow"
+        Action = [
+          "lambda:InvokeFunction"
+        ]
+        Resource = "arn:aws:lambda:*:*:function:${var.project_name}-${var.environment}-ingest"
       }
     ]
   })

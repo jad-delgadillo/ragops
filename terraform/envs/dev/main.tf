@@ -63,6 +63,12 @@ variable "groq_api_key" {
   default   = ""
 }
 
+variable "github_token" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+
 variable "llm_provider" {
   type    = string
   default = "openai"
@@ -76,6 +82,41 @@ variable "llm_enabled" {
 variable "embedding_provider" {
   type    = string
   default = "openai"
+}
+
+variable "repo_onboarding_enabled" {
+  type    = bool
+  default = false
+}
+
+variable "repo_cache_dir" {
+  type    = string
+  default = "/tmp/ragops/repos"
+}
+
+variable "repo_manuals_dir" {
+  type    = string
+  default = "/tmp/ragops/manuals"
+}
+
+variable "repo_archive_max_mb" {
+  type    = number
+  default = 80
+}
+
+variable "repo_onboarding_timeout_seconds" {
+  type    = number
+  default = 60
+}
+
+variable "api_auth_enabled" {
+  type    = bool
+  default = false
+}
+
+variable "api_keys_json" {
+  type    = string
+  default = "{}"
 }
 
 
@@ -116,17 +157,25 @@ module "apigw_lambda" {
   s3_object_version = aws_s3_object.lambda_package.version_id
 
   lambda_env_vars = {
-    ENVIRONMENT        = var.environment
-    LOG_LEVEL          = "INFO"
-    DATABASE_URL       = var.neon_connection_string
-    S3_BUCKET          = module.s3.bucket_name
-    OPENAI_API_KEY     = var.openai_api_key
-    GEMINI_API_KEY     = var.gemini_api_key
-    ANTHROPIC_API_KEY  = var.anthropic_api_key
-    GROQ_API_KEY       = var.groq_api_key
-    LLM_PROVIDER       = var.llm_provider
-    LLM_ENABLED        = tostring(var.llm_enabled)
-    EMBEDDING_PROVIDER = var.embedding_provider
+    ENVIRONMENT                     = var.environment
+    LOG_LEVEL                       = "INFO"
+    DATABASE_URL                    = var.neon_connection_string
+    S3_BUCKET                       = module.s3.bucket_name
+    OPENAI_API_KEY                  = var.openai_api_key
+    GEMINI_API_KEY                  = var.gemini_api_key
+    ANTHROPIC_API_KEY               = var.anthropic_api_key
+    GROQ_API_KEY                    = var.groq_api_key
+    GITHUB_TOKEN                    = var.github_token
+    LLM_PROVIDER                    = var.llm_provider
+    LLM_ENABLED                     = tostring(var.llm_enabled)
+    EMBEDDING_PROVIDER              = var.embedding_provider
+    REPO_ONBOARDING_ENABLED         = tostring(var.repo_onboarding_enabled)
+    REPO_CACHE_DIR                  = var.repo_cache_dir
+    REPO_MANUALS_DIR                = var.repo_manuals_dir
+    REPO_ARCHIVE_MAX_MB             = tostring(var.repo_archive_max_mb)
+    REPO_ONBOARDING_TIMEOUT_SECONDS = tostring(var.repo_onboarding_timeout_seconds)
+    API_AUTH_ENABLED                = tostring(var.api_auth_enabled)
+    API_KEYS_JSON                   = var.api_keys_json
   }
 }
 

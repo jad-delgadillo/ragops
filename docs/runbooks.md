@@ -20,19 +20,19 @@ make query Q="How does the ingestion work?"
 
 ### Chat (multi-turn onboarding)
 ```bash
-python -m services.cli.main chat "How should I learn this codebase?" --mode explain_like_junior
+.venv/bin/python -m services.cli.main chat "How should I learn this codebase?" --mode explain_like_junior
 # Continue same thread:
-python -m services.cli.main chat "What file should I read first?" --session-id <session-id>
+.venv/bin/python -m services.cli.main chat "What file should I read first?" --session-id <session-id>
 ```
 
 ### Feedback loop
 ```bash
-python -m services.cli.main feedback --verdict positive --comment "Helpful answer"
+.venv/bin/python -m services.cli.main feedback --verdict positive --comment "Helpful answer"
 ```
 
 ### Evaluation
 ```bash
-python -m services.cli.main eval --dataset ./eval/cases.yaml
+.venv/bin/python -m services.cli.main eval --dataset ./eval/cases.yaml
 ```
 
 ### Frontend onboarding chat
@@ -45,24 +45,38 @@ Detailed guide: `docs/frontend-chat-manual.md`
 
 ### Generate onboarding manuals
 ```bash
-python -m services.cli.main generate-manuals --output ./manuals
+.venv/bin/python -m services.cli.main generate-manuals --output ./manuals
 # Optional: ingest generated manuals
-python -m services.cli.main generate-manuals --output ./manuals --ingest
+.venv/bin/python -m services.cli.main generate-manuals --output ./manuals --ingest
 ```
 
 ### GitHub repo onboarding
 ```bash
 # Register + index GitHub repo
-python -m services.cli.main repo add https://github.com/<org>/<repo> --ref main --generate-manuals
+.venv/bin/python -m services.cli.main repo add https://github.com/<org>/<repo> --ref main --generate-manuals
 
 # Refresh tracked repo
-python -m services.cli.main repo sync <owner-repo>
+.venv/bin/python -m services.cli.main repo sync <owner-repo>
 
 # Refresh all tracked repos
-python -m services.cli.main repo sync --all
+.venv/bin/python -m services.cli.main repo sync --all
 
 # Show tracked repos
-python -m services.cli.main repo list
+.venv/bin/python -m services.cli.main repo list
+
+# Notes:
+# - Repo source is ingested into <owner-repo>_code
+# - Generated manuals are ingested into <owner-repo>_manuals by default
+
+# For repos created before split collections:
+.venv/bin/python -m services.cli.main repo migrate-collections --all
+.venv/bin/python -m services.cli.main repo migrate-collections --all --apply --purge-old
+
+# Clean reindex one repo to remove stale mixed chunks
+.venv/bin/python -m services.cli.main repo sync <owner-repo> \
+  --generate-manuals \
+  --reset-code-collection \
+  --reset-manuals-collection
 ```
 
 ### Reset database
@@ -104,6 +118,21 @@ curl -X POST ${API_URL}/v1/ingest \
 curl -X POST ${API_URL}/v1/query \
   -H "Content-Type: application/json" \
   -d '{"question": "How do I deploy?", "collection": "default"}'
+```
+
+### Async repo onboarding API
+```bash
+# Start onboarding job
+curl -sS -X POST ${API_URL}/v1/repos/onboard \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: ${API_KEY}" \
+  -d '{"repo_url":"https://github.com/openai/openai-python","ref":"main","collection":"openai-python","generate_manuals":true,"reset_code_collection":true,"reset_manuals_collection":true,"async":true}'
+
+# Poll status (replace JOB_ID)
+curl -sS -X POST ${API_URL}/v1/repos/onboard \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: ${API_KEY}" \
+  -d '{"action":"status","job_id":"JOB_ID"}'
 ```
 
 ---

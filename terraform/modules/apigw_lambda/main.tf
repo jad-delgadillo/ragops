@@ -344,6 +344,85 @@ resource "aws_api_gateway_integration_response" "feedback_options_200" {
   ]
 }
 
+# /v1/repos
+resource "aws_api_gateway_resource" "repos" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  parent_id   = aws_api_gateway_resource.v1.id
+  path_part   = "repos"
+}
+
+# /v1/repos/onboard
+resource "aws_api_gateway_resource" "repos_onboard" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  parent_id   = aws_api_gateway_resource.repos.id
+  path_part   = "onboard"
+}
+
+resource "aws_api_gateway_method" "repos_onboard_post" {
+  rest_api_id   = aws_api_gateway_rest_api.api.id
+  resource_id   = aws_api_gateway_resource.repos_onboard.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "repos_onboard_post" {
+  rest_api_id             = aws_api_gateway_rest_api.api.id
+  resource_id             = aws_api_gateway_resource.repos_onboard.id
+  http_method             = aws_api_gateway_method.repos_onboard_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.query.invoke_arn
+}
+
+resource "aws_api_gateway_method" "repos_onboard_options" {
+  rest_api_id   = aws_api_gateway_rest_api.api.id
+  resource_id   = aws_api_gateway_resource.repos_onboard.id
+  http_method   = "OPTIONS"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "repos_onboard_options" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  resource_id = aws_api_gateway_resource.repos_onboard.id
+  http_method = aws_api_gateway_method.repos_onboard_options.http_method
+  type        = "MOCK"
+
+  request_templates = {
+    "application/json" = "{\"statusCode\": 200}"
+  }
+}
+
+resource "aws_api_gateway_method_response" "repos_onboard_options_200" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  resource_id = aws_api_gateway_resource.repos_onboard.id
+  http_method = aws_api_gateway_method.repos_onboard_options.http_method
+  status_code = "200"
+
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin"  = true
+    "method.response.header.Access-Control-Allow-Methods" = true
+    "method.response.header.Access-Control-Allow-Headers" = true
+  }
+}
+
+resource "aws_api_gateway_integration_response" "repos_onboard_options_200" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  resource_id = aws_api_gateway_resource.repos_onboard.id
+  http_method = aws_api_gateway_method.repos_onboard_options.http_method
+  status_code = aws_api_gateway_method_response.repos_onboard_options_200.status_code
+
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin"  = "'*'"
+    "method.response.header.Access-Control-Allow-Methods" = "'GET,POST,OPTIONS'"
+    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,X-API-Key'"
+  }
+
+  depends_on = [
+    aws_api_gateway_integration.repos_onboard_options,
+    aws_api_gateway_method_response.repos_onboard_options_200,
+  ]
+}
+
 # /v1/ingest
 resource "aws_api_gateway_resource" "ingest" {
   rest_api_id = aws_api_gateway_rest_api.api.id
@@ -379,6 +458,8 @@ resource "aws_api_gateway_deployment" "api" {
     aws_api_gateway_integration.chat_options,
     aws_api_gateway_integration.feedback_post,
     aws_api_gateway_integration.feedback_options,
+    aws_api_gateway_integration.repos_onboard_post,
+    aws_api_gateway_integration.repos_onboard_options,
     aws_api_gateway_integration.ingest_post,
   ]
 
