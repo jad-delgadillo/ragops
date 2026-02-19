@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -181,6 +182,40 @@ def test_rerank_chunks_for_broad_questions_prefers_docs_only_when_available() ->
     assert "services/cli/main.py" not in sources
 
 
+def test_rerank_chunks_prefers_manuals_before_raw_code_for_onboarding() -> None:
+    chunks = [
+        {"source_file": "services/api/app/chat.py", "similarity": 0.94, "chunk_index": 1},
+        {"source_file": "manuals/OPERATIONS_RUNBOOK.md", "similarity": 0.80, "chunk_index": 2},
+        {"source_file": "docs/user-guide.md", "similarity": 0.82, "chunk_index": 3},
+    ]
+    ranked = rerank_chunks("how should i onboard to this project?", chunks, top_k=2)
+    assert ranked[0]["source_file"] == "manuals/OPERATIONS_RUNBOOK.md"
+    assert "ranking_signals" in ranked[0]
+    assert "manual_source" in ranked[0]["ranking_signals"]
+
+
+def test_rerank_chunks_uses_codeowners_area_boost(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    (root / ".git").mkdir(parents=True)
+    (root / "services" / "api" / "app").mkdir(parents=True)
+    (root / "services" / "cli").mkdir(parents=True)
+    (root / "CODEOWNERS").write_text(
+        "/services/api/ @platform-team\n/services/cli/ @cli-team\n",
+        encoding="utf-8",
+    )
+    api_file = root / "services" / "api" / "app" / "handler.py"
+    cli_file = root / "services" / "cli" / "main.py"
+    api_file.write_text("def handler():\n    return 200\n", encoding="utf-8")
+    cli_file.write_text("def main():\n    return 0\n", encoding="utf-8")
+
+    chunks = [
+        {"source_file": str(cli_file), "similarity": 0.91, "chunk_index": 1},
+        {"source_file": str(api_file), "similarity": 0.80, "chunk_index": 2},
+    ]
+    ranked = rerank_chunks("explain platform api behavior", chunks, top_k=1)
+    assert ranked[0]["source_file"] == str(api_file)
+
+
 def test_handle_chat_returns_400_for_invalid_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = Settings(_env_file=None, OPENAI_API_KEY="test")
     monkeypatch.setattr("services.api.app.handler.get_settings", lambda: settings)
@@ -252,6 +287,54 @@ def test_handle_chat_success_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     assert body["turn_index"] == 2
     assert "answer" in body
     assert body["answer_style"] == "concise"
+
+
+def test_handle_chat_passes_include_ranking_signals(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(_env_file=None, OPENAI_API_KEY="test")
+
+    class _EmbedProvider:
+        dimension = 1536
+
+    captured: dict[str, Any] = {}
+
+    def _fake_chat(*args: Any, **kwargs: Any) -> ChatResult:
+        captured.update(kwargs)
+        return ChatResult(
+            session_id="session-rank",
+            answer="ok",
+            citations=[
+                {
+                    "source": "README.md",
+                    "line_start": 1,
+                    "line_end": 5,
+                    "similarity": 0.9,
+                    "ranking_signals": ["manual_source"],
+                }
+            ],
+            retrieved=1,
+            latency_ms=9.0,
+            mode="default",
+            turn_index=1,
+        )
+
+    monkeypatch.setattr("services.api.app.handler.get_settings", lambda: settings)
+    monkeypatch.setattr("services.api.app.handler.get_embedding_provider", lambda _: _EmbedProvider())
+    monkeypatch.setattr("services.api.app.handler.get_llm_provider", lambda _: None)
+    monkeypatch.setattr("services.api.app.handler.chat", _fake_chat)
+
+    event = {
+        "body": json.dumps(
+            {
+                "question": "why this source?",
+                "include_ranking_signals": True,
+            }
+        )
+    }
+    response = _handle_chat(event)
+    assert response["statusCode"] == 200
+    assert captured["include_ranking_signals"] is True
+    body = json.loads(response["body"])
+    assert body["citations"][0]["ranking_signals"] == ["manual_source"]
 
 
 def test_handle_feedback_rejects_bad_verdict(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -522,4 +605,3 @@ def test_handle_chat_response_contract_includes_citation_keys(
     assert len(body["citations"]) >= 1
     for key in ("source", "line_start", "line_end", "similarity"):
         assert key in body["citations"][0], f"Missing key '{key}' in citation"
-

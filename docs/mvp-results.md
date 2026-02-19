@@ -15,7 +15,8 @@
 
 | KPI | Value | Target |
 | --- | --- | --- |
-| `onboarding_duration_seconds` | _pending_ | < 120s |
+| `time_to_first_answer_seconds` | _pending_ | < 180s |
+| `scan_duration_seconds` | _pending_ | _tracking_ |
 | `chat_p50_latency_ms` | _pending_ | < 2000 |
 | `chat_p95_latency_ms` | _pending_ | < 5000 |
 | `citation_coverage_rate` | _pending_ | ≥ 80% |
@@ -44,10 +45,11 @@ _Generated after running:_
 
 | Criterion | Status |
 | --- | --- |
-| Public GitHub URL → onboarding returns collections | ✅ Tested (unit) |
+| In new project dir, `init -> scan -> chat` works without Docker | ✅ Tested (local flow) |
 | Chat answers return ≥1 citation for answerable questions | ✅ Tested (unit) |
-| Feedback endpoint writes records for valid verdicts | ✅ Tested (unit) |
-| Async onboarding returns 202 + `job_id`, status polling works | ✅ Tested (unit) |
+| Follow-up in same session preserves context | ✅ Tested (contract/unit) |
+| `scan` generates required manuals including `ARCHITECTURE_DIAGRAM.md` | ✅ Tested (manual generation tests) |
+| Feedback command/endpoint stores positive and negative verdicts | ✅ Tested (unit) |
 | Test suite passes (`pytest services/`) | ✅ 85 passed |
 
 ## Demo Acceptance

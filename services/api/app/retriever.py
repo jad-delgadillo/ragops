@@ -7,10 +7,11 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from services.api.app.ownership import ownership_bonus_for_source, tokenize_question
 from services.core.config import Settings, get_settings
-from services.core.database import get_connection, search_vectors, validate_embedding_dimension
 from services.core.logging import timed_metric
 from services.core.providers import EmbeddingProvider, LLMProvider
+from services.core.storage import get_connection, search_vectors, validate_embedding_dimension
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,16 @@ HIGH_LEVEL_SOURCE_HINTS = (
     "runbooks",
     "user-guide",
     ".md",
+)
+MANUAL_SOURCE_HINTS = (
+    "project_overview.md",
+    "architecture_map.md",
+    "codebase_manual.md",
+    "api_manual.md",
+    "architecture_diagram.md",
+    "operations_runbook.md",
+    "unknowns_and_gaps.md",
+    "database_manual.md",
 )
 LOW_VALUE_PATH_HINTS = (
     ".egg-info/",
@@ -101,12 +112,22 @@ def is_high_level_source(source: str) -> bool:
     return any(hint in src for hint in HIGH_LEVEL_SOURCE_HINTS)
 
 
-def source_bonus(source: str, *, broad: bool) -> float:
+def is_manual_source(source: str) -> bool:
+    """Return True when source appears to be generated manual content."""
+    src = source.lower()
+    return any(hint in src for hint in MANUAL_SOURCE_HINTS)
+
+
+def source_bonus(source: str, *, broad: bool, question_tokens: set[str] | None = None) -> float:
     """Compute source-based rerank bonus for broad architectural queries."""
     src = source.lower()
     bonus = 0.0
     if is_low_value_source(src):
         bonus -= 0.30
+    if question_tokens:
+        bonus += ownership_bonus_for_source(source, question_tokens=question_tokens)
+    if broad and is_manual_source(src):
+        bonus += 0.18
     if broad and any(hint in src for hint in HIGH_LEVEL_SOURCE_HINTS):
         bonus += 0.12
     if broad and is_high_level_source(src):
@@ -125,11 +146,12 @@ def rerank_query_chunks(
     """Rerank and diversify chunk selection for better query answer quality."""
     broad = is_broad_query(question)
     file_hints = extract_file_hints(question)
+    question_tokens = tokenize_question(question)
     scored: list[tuple[float, dict[str, Any]]] = []
     for chunk in chunks:
         similarity = float(chunk.get("similarity", 0.0))
         source = str(chunk.get("source_file", chunk.get("s3_key", "unknown")))
-        score = similarity + source_bonus(source, broad=broad)
+        score = similarity + source_bonus(source, broad=broad, question_tokens=question_tokens)
         if file_hints and any(hint in source.lower() for hint in file_hints):
             score += 0.25
         scored.append((score, chunk))
@@ -178,14 +200,19 @@ def rerank_query_chunks(
     if not broad:
         return _select_diverse(ranked_chunks, top_k)
 
+    manual_level: list[dict[str, Any]] = []
     high_level: list[dict[str, Any]] = []
     code_level: list[dict[str, Any]] = []
     for chunk in ranked_chunks:
         source = str(chunk.get("source_file", chunk.get("s3_key", "unknown")))
-        if is_high_level_source(source):
+        if is_manual_source(source):
+            manual_level.append(chunk)
+        elif is_high_level_source(source):
             high_level.append(chunk)
         else:
             code_level.append(chunk)
+    if manual_level:
+        return _select_diverse(manual_level + high_level + code_level, top_k)
     return _select_diverse(high_level + code_level, top_k)
 
 
@@ -238,7 +265,8 @@ def embed_files_on_demand(
     Only embeds files not already marked as embedded in repo_files.
     Returns the number of newly embedded files.
     """
-    from services.core.database import (
+    from services.core.github_tree import fetch_files_content
+    from services.core.storage import (
         compute_sha256,
         get_repo_meta,
         get_unembedded_files,
@@ -247,7 +275,6 @@ def embed_files_on_demand(
         upsert_document,
         validate_embedding_dimension,
     )
-    from services.core.github_tree import fetch_files_content
     from services.ingest.app.chunker import chunk_text, normalize_text
 
     conn = get_connection(settings)
@@ -255,7 +282,10 @@ def embed_files_on_demand(
         # Get repo metadata (owner, repo, ref) from repo_files table
         meta = get_repo_meta(conn, collection=collection)
         if not meta:
-            logger.warning("No repo metadata found for collection %s — skipping on-demand embed", collection)
+            logger.warning(
+                "No repo metadata found for collection %s — skipping on-demand embed",
+                collection,
+            )
             return 0
 
         # Find which paths are not yet embedded

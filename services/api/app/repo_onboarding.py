@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import re
 import shutil
 import zipfile
@@ -19,13 +20,13 @@ from services.cli.repositories import (
     parse_github_repo_url,
     resolve_collection_pair,
 )
-from services.core.config import Settings, get_settings
-from services.core.database import (
+from services.core.config import Settings
+from services.core.providers import get_embedding_provider
+from services.core.storage import (
     get_connection,
     purge_collection_documents,
     upsert_file_tree,
 )
-from services.core.providers import get_embedding_provider
 from services.ingest.app.pipeline import ingest_local_directory
 
 REPO_KEY_SANITIZE_PATTERN = re.compile(r"[^a-zA-Z0-9._-]+")
@@ -268,8 +269,6 @@ def onboard_github_repo(
 # Lazy onboarding — file tree only, no full download
 # ---------------------------------------------------------------------------
 
-import logging
-
 _lazy_logger = logging.getLogger(__name__)
 
 
@@ -375,13 +374,13 @@ def onboard_github_repo_lazy(
         path_texts.append(desc)
 
     # Embed in batches and upsert as chunks
-    from services.core.database import (
+    from services.core.logging import timed_metric
+    from services.core.storage import (
         compute_sha256,
         upsert_chunks,
         upsert_document,
         validate_embedding_dimension,
     )
-    from services.core.logging import timed_metric
 
     conn = get_connection(settings)
     try:
@@ -449,4 +448,3 @@ def onboard_github_repo_lazy(
         total_files=len(all_files),
         embeddable_files=len(embeddable),
     )
-

@@ -1,209 +1,170 @@
-# RAG Ops Platform - User Guide
+# RAG Ops - User Guide
 
 ## Overview
-RAG Ops ingests project docs/code into pgvector and answers questions with retrieval and optional LLM generation.
 
-## Local Setup
+RAG Ops is a CLI onboarding copilot for codebases.
+
+The core user flow is:
+1. `ragops init`
+2. `ragops scan`
+3. `ragops chat`
+
+MVP scope and acceptance gates are defined in `docs/mvp.md`.
+
+## Quickstart (Local CLI)
+
 ```bash
-cp .env.example .env
-make dev
-make install
-make init
+pip install ragops
+cd /path/to/your-project
+ragops init
+ragops scan
+ragops chat
 ```
 
-## Core CLI Workflow
+Single-turn example:
+
 ```bash
-# Index current project (or pass DIR=./docs)
-make ingest
+ragops chat "How should I start learning this codebase?"
+```
 
-# Ask a question
-make query Q="How does ingestion work?"
+## What `ragops scan` Does
 
-# Multi-turn onboarding chat
-.venv/bin/python -m services.cli.main chat "How should I learn this codebase?" \
+`ragops scan` performs one command onboarding:
+1. Ingests project files into a collection.
+2. Generates onboarding manuals in `./.ragops/manuals` by default.
+3. Ingests those manuals so chat can cite them immediately.
+
+Required generated outputs:
+- `PROJECT_OVERVIEW.md`
+- `ARCHITECTURE_MAP.md`
+- `CODEBASE_MANUAL.md`
+- `API_MANUAL.md`
+- `ARCHITECTURE_DIAGRAM.md`
+- `OPERATIONS_RUNBOOK.md`
+- `UNKNOWNS_AND_GAPS.md`
+- `DATABASE_MANUAL.md`
+- `SCAN_INDEX.json`
+
+Full contract and quality rules: `docs/scan-output-spec.md`.
+
+## Core CLI Commands
+
+```bash
+# initialize local project config
+ragops init
+
+# scan project + generate manuals + ingest manuals
+ragops scan
+
+# optional: custom collection name
+ragops scan --collection my-project
+
+# interactive multi-turn chat
+ragops chat
+
+# single turn chat
+ragops chat "How does ingestion work?"
+
+# tune answer style
+ragops chat "Explain this code path" \
   --mode explain_like_junior \
-  --answer-style concise \
-  --show-context
+  --answer-style concise
 
-# Submit quality feedback
-.venv/bin/python -m services.cli.main feedback --verdict positive --comment "Helpful answer"
+# inspect ranking decisions for each citation
+ragops chat "why this answer?" --show-ranking-signals
 
-# Generate markdown docs from source structure
-.venv/bin/python -m services.cli.main generate-docs --output ./docs
+# submit quality feedback
+ragops feedback --verdict positive --comment "helpful answer"
 
-# Generate deterministic onboarding manuals (codebase, API, DB)
-.venv/bin/python -m services.cli.main generate-manuals --output ./manuals
-
-# Optional: ingest the manuals so they are answerable via query
-.venv/bin/python -m services.cli.main generate-manuals --output ./manuals --ingest
-
-# Run dataset evaluation (JSON or YAML dataset)
-.venv/bin/python -m services.cli.main eval --dataset ./eval/cases.yaml
+# run eval dataset
+ragops eval --dataset ./eval/cases.yaml
 ```
 
-## GitHub Repo Workflow
-Connect a GitHub repository, index it, and chat over its codebase.
+## Config and Profiles
+
+`ragops init` can store reusable defaults in `~/.ragops/config.yaml`.
+
+Useful config commands:
 
 ```bash
-# Add repository (clones into ./.ragops/repos/<owner-repo>, then ingests)
-.venv/bin/python -m services.cli.main repo add https://github.com/<org>/<repo> \
-  --ref main \
-  --generate-manuals
-
-# List tracked repositories
-.venv/bin/python -m services.cli.main repo list
-
-# Sync one tracked repository (git pull + refresh index)
-.venv/bin/python -m services.cli.main repo sync <owner-repo>
-
-# Sync all tracked repositories
-.venv/bin/python -m services.cli.main repo sync --all
-
-# Query/chat using the repo collection
-.venv/bin/python -m services.cli.main chat "What is this repo about?" --collection <owner-repo>_code
-
-# Query/manual exploration (generated manuals are isolated by default)
-.venv/bin/python -m services.cli.main chat "Summarize onboarding docs" --collection <owner-repo>_manuals
-
-# Clean reindex one repo (purges stale chunks, then re-ingests code + manuals)
-.venv/bin/python -m services.cli.main repo sync <owner-repo> \
-  --generate-manuals \
-  --reset-code-collection \
-  --reset-manuals-collection
-
-# Migrate existing tracked repos created before collection split
-.venv/bin/python -m services.cli.main repo migrate-collections --all
-.venv/bin/python -m services.cli.main repo migrate-collections --all --apply --purge-old
+ragops config show
+ragops config set --openai-api-key <key> --storage-backend sqlite --llm-enabled true
+ragops config doctor
+ragops config doctor --fix
 ```
 
-Important flags:
-- `repo add --name`: override default repo key (`owner-repo`)
-- `repo add --collection`: base collection name (code uses `<base>_code`)
-- `repo add --github-token`: auth for private repos (or set `GITHUB_TOKEN`)
-- `repo add --skip-ingest`: clone/register without indexing
-- `repo add --generate-manuals`: generate manual pack under `./manuals/<repo-key>` and ingest into `<collection>_manuals`
-- `repo add --manuals-collection`: override manuals collection name
-- `repo sync --ref`: sync against a specific branch/tag
-- `repo sync --reset-code-collection`: purge `<collection>_code` before reindex
-- `repo sync --reset-manuals-collection`: purge manuals collection before reindex
-- `repo migrate-collections --apply`: normalize existing repos to split collections
+## GitHub Repo Workflow (Secondary)
 
-## Frontend Onboarding Chat
-Use the browser UI manual for step-by-step setup:
-- `docs/frontend-chat-manual.md`
-- `docs/testing-playbook.md` (safe local/lambda testing workflow and command safety)
+If you want explicit repo registration and sync commands:
 
-Quick start:
+```bash
+ragops repo add https://github.com/<org>/<repo> --ref main --generate-manuals
+ragops repo list
+ragops repo sync <owner-repo>
+ragops repo sync --all
+```
+
+Key flags:
+- `repo add --name` to override repo key.
+- `repo add --collection` to set base collection name.
+- `repo add --github-token` for private repos.
+- `repo add --skip-ingest` to register without indexing.
+- `repo add --generate-manuals` to generate and ingest manuals collection.
+- `repo sync --ref` to sync against branch/tag.
+- `repo sync --reset-code-collection` to purge and reindex code collection.
+- `repo sync --reset-manuals-collection` to purge and reindex manuals collection.
+
+## API Endpoints
+
+Base URL examples:
+- Local: `http://localhost:8000`
+- AWS: `https://{api-id}.execute-api.{region}.amazonaws.com/{stage}`
+
+Main endpoints:
+- `GET /health`
+- `POST /v1/query`
+- `POST /v1/chat`
+- `POST /v1/feedback`
+- `POST /v1/repos/onboard`
+
+Reference: `docs/api-contract.md`.
+
+Note:
+- `POST /v1/ingest` with `s3_prefix` is not implemented yet.
+
+## Optional Frontend Flow
+
 ```bash
 make mock-api
 make frontend
 ```
+
 Then open `http://127.0.0.1:4173`.
 
-## Optional Access Control
-Enable collection-scoped API key auth:
-```env
-API_AUTH_ENABLED=true
-API_KEYS_JSON={"my-key":{"name":"onboarding-bot","permissions":["query","chat","feedback","repo_manage"],"collections":["*"]}}
-```
-When enabled, send `X-API-Key` for protected endpoints.
-
-## API Endpoints
-Base URL examples:
-- Local: `http://localhost:8000` (if you run an API host)
-- AWS: `https://{api-id}.execute-api.{region}.amazonaws.com/{stage}`
-
-### `GET /`
-Returns basic service info and endpoint list.
-
-### `GET /health`
-Checks DB connectivity and embedding provider/schema compatibility.
-
-### `POST /v1/query`
-Ask a grounded question.
-
-Request:
-```json
-{
-  "question": "How do I deploy this project?",
-  "collection": "default"
-}
-```
-
-### `POST /v1/chat`
-Multi-turn chat with persistent `session_id`.
-
-Request:
-```json
-{
-  "question": "How should I navigate this codebase?",
-  "collection": "default",
-  "session_id": "optional-existing-session",
-  "mode": "explain_like_junior",
-  "answer_style": "concise",
-  "top_k": 5
-}
-```
-
-### `POST /v1/ingest`
-Ingest files from a local directory path visible to the runtime.
-
-Request:
-```json
-{
-  "local_dir": "./docs",
-  "collection": "default"
-}
-```
-
-Note: `s3_prefix` mode is not implemented yet in `services/ingest/app/handler.py`.
-
-### `POST /v1/repos/onboard`
-Download a public GitHub repo archive, ingest code into `<collection>_code`, and optionally generate/ingest manuals into `<collection>_manuals`.
-
-Required env toggle:
-```env
-REPO_ONBOARDING_ENABLED=true
-```
-
-Security note:
-- In non-local environments (`ENVIRONMENT != local`), this endpoint requires `API_AUTH_ENABLED=true` and a valid `X-API-Key` with `repo_manage` permission.
-
-Request:
-```json
-{
-  "repo_url": "https://github.com/org/repo",
-  "ref": "main",
-  "collection": "org-repo",
-  "generate_manuals": true,
-  "reset_code_collection": true,
-  "reset_manuals_collection": true,
-  "async": true
-}
-```
-
-Async behavior:
-- In deployed environments, this endpoint should be called with `"async": true` (default in frontend).
-- Response returns `202` with a `job_id`.
-- Poll status with:
-
-```json
-{
-  "action": "status",
-  "job_id": "your-job-id"
-}
-```
+Frontend docs:
+- `docs/frontend-chat-manual.md`
+- `docs/testing-playbook.md`
 
 ## Troubleshooting
-### No results from query
-1. Re-run ingestion for the right collection.
-2. Confirm collection names match.
-3. Increase retrieval depth (`--top-k`).
 
-### Embedding configuration error
-1. Confirm API key for the selected embedding provider is set.
-2. Confirm provider embedding dimension matches DB schema.
+### No results from chat/query
+1. Re-run `ragops scan`.
+2. Confirm the expected collection name.
+3. Increase retrieval depth with `--top-k`.
 
-### Chat returns only source list (no generated explanation)
-1. Ensure Lambda/local env has `LLM_ENABLED=true`.
-2. Ensure valid `OPENAI_API_KEY` (or selected LLM provider key) is set.
+### Chat returns citations but weak explanation
+1. Ensure `LLM_ENABLED=true`.
+2. Ensure valid `OPENAI_API_KEY` is configured.
+3. Try `--mode explain_like_junior --answer-style detailed`.
+
+### Config or provider mismatch
+1. Run `ragops config doctor`.
+2. Confirm provider API key and embedding compatibility with DB schema.
+
+## Related Docs
+
+- `docs/mvp.md`
+- `docs/scan-output-spec.md`
+- `docs/roadmap.md`
+- `docs/runbooks.md`
+- `docs/mvp-results.md`

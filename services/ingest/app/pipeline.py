@@ -9,7 +9,9 @@ from pathlib import Path
 from typing import Any
 
 from services.core.config import Settings, get_settings
-from services.core.database import (
+from services.core.logging import emit_metric, timed_metric
+from services.core.providers import EmbeddingProvider
+from services.core.storage import (
     compute_sha256,
     document_exists,
     get_connection,
@@ -17,8 +19,6 @@ from services.core.database import (
     upsert_document,
     validate_embedding_dimension,
 )
-from services.core.logging import emit_metric, timed_metric
-from services.core.providers import EmbeddingProvider
 from services.ingest.app.chunker import chunk_text, normalize_text
 
 logger = logging.getLogger(__name__)
@@ -126,8 +126,14 @@ def collect_ingest_files(
     directory: Path,
     *,
     extra_ignore_dirs: set[str] | None = None,
+    include_paths: set[str] | None = None,
 ) -> list[Path]:
     """Collect files eligible for ingestion under the provided directory."""
+    include_set = (
+        {p.replace("\\", "/").lstrip("./") for p in include_paths}
+        if include_paths is not None
+        else None
+    )
     files: list[Path] = []
     for candidate in directory.rglob("*"):
         if not candidate.is_file():
@@ -141,6 +147,10 @@ def collect_ingest_files(
             extra_ignore_dirs=extra_ignore_dirs,
         ):
             continue
+        if include_set is not None:
+            rel = candidate.relative_to(directory).as_posix()
+            if rel not in include_set:
+                continue
         files.append(candidate)
     return files
 
@@ -151,6 +161,7 @@ def ingest_local_directory(
     collection: str = "default",
     settings: Settings | None = None,
     extra_ignore_dirs: set[str] | None = None,
+    include_paths: set[str] | None = None,
 ) -> IngestStats:
     """Ingest all text files from a local directory.
 
@@ -160,6 +171,7 @@ def ingest_local_directory(
         collection: Collection name for grouping documents.
         settings: Optional settings override.
         extra_ignore_dirs: Optional additional relative directories to ignore.
+        include_paths: Optional relative paths to ingest (incremental mode).
 
     Returns:
         IngestStats with counts and timing.
@@ -174,7 +186,11 @@ def ingest_local_directory(
         return stats
 
     # Collect text/code/config files with relative ignore rules
-    files = collect_ingest_files(dir_path, extra_ignore_dirs=extra_ignore_dirs)
+    files = collect_ingest_files(
+        dir_path,
+        extra_ignore_dirs=extra_ignore_dirs,
+        include_paths=include_paths,
+    )
 
     if not files:
         logger.warning("No text files found in %s", directory)

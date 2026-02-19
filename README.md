@@ -1,120 +1,119 @@
 # RAG Ops
 
-Citation-grounded GitHub repo onboarding copilot.
+RAG Ops is a CLI codebase onboarding copilot.
 
-RAG Ops turns a repository URL into an indexed knowledge base, then answers onboarding questions with file/line citations, session memory, and feedback capture.
+It indexes a project, generates onboarding manuals, and answers questions with citations.
 
-## MVP Focus
+## MVP in One Flow
 
-This repository is now optimized around one product story:
-
-1. Onboard a GitHub repository.
-2. Ingest code and generated manuals into isolated collections.
-3. Ask onboarding questions in chat mode with citations.
-4. Capture feedback and evaluate retrieval quality.
-
-Detailed scope and acceptance criteria: `docs/mvp.md`.
-
-## What Works Today
-
-- Repo onboarding pipeline (download archive, ingest code, optional manual generation).
-- Conversational RAG chat with session memory and answer modes.
-- Citation payloads for source transparency.
-- Feedback endpoint and table for quality loops.
-- Local-first development with Docker + PostgreSQL/pgvector.
-- AWS deploy path with Lambda + API Gateway + Terraform.
-
-## Known MVP Boundaries
-
-- `POST /v1/ingest` with `s3_prefix` is not implemented yet (returns `501`).
-- Bedrock provider classes are present but intentionally stubbed.
-- The stable MVP path is OpenAI embeddings + OpenAI LLM.
-
-## Quick Start (Local MVP Flow)
-
-1. Configure environment:
 ```bash
-cp .env.example .env
-# Set OPENAI_API_KEY and LLM_ENABLED=true
+ragops init
+ragops scan
+ragops chat
 ```
 
-2. Start dependencies and install:
+That is the product MVP.
+
+## Quickstart (Local CLI)
+
 ```bash
-make dev
-make install
+pip install ragops
+cd /path/to/any-project
+ragops init
+ragops scan
+ragops chat
 ```
 
-3. Add and index a GitHub repository:
+Single-turn usage also works:
+
 ```bash
-.venv/bin/python -m services.cli.main repo add https://github.com/<org>/<repo> \
-  --ref main \
-  --generate-manuals
+ragops chat "How should I start learning this codebase?"
 ```
 
-4. Chat against the indexed code collection:
+## What `scan` Produces
+
+`ragops scan` indexes the repository and writes manuals to `./.ragops/manuals` by default.
+
+Current manual outputs:
+- `PROJECT_OVERVIEW.md`
+- `ARCHITECTURE_MAP.md`
+- `CODEBASE_MANUAL.md`
+- `API_MANUAL.md`
+- `ARCHITECTURE_DIAGRAM.md`
+- `OPERATIONS_RUNBOOK.md`
+- `UNKNOWNS_AND_GAPS.md`
+- `DATABASE_MANUAL.md` (database introspection is skipped in `scan` mode)
+- `SCAN_INDEX.json`
+
+After generation, scan ingests these manuals so chat can use them as context.
+
+Detailed contract: `docs/scan-output-spec.md`.
+
+## MVP Scope
+
+In scope:
+- Local-first CLI onboarding (`init`, `scan`, `chat`)
+- Citation-grounded answers with session continuity
+- Deterministic manual generation during scan
+- Feedback and eval commands for quality tracking
+
+Out of scope for the current MVP:
+- Production-ready Bedrock path
+- `s3_prefix` ingestion in `/v1/ingest` (currently returns `501`)
+- Billing, multi-tenant org management, enterprise auth stack
+
+Full definition: `docs/mvp.md`.
+
+## Core Commands
+
 ```bash
-.venv/bin/python -m services.cli.main chat \
-  "How should I start learning this codebase?" \
-  --collection <owner-repo>_code \
-  --mode explain_like_junior \
-  --answer-style concise
+ragops init
+ragops scan --collection <name>
+ragops chat
+ragops chat "question" --mode explain_like_junior --answer-style concise
+ragops chat "question" --show-ranking-signals
+ragops feedback --verdict positive --comment "helpful answer"
+ragops eval --dataset ./eval/cases.yaml
 ```
 
-5. Submit quality feedback:
+Global profile helpers:
+
 ```bash
-.venv/bin/python -m services.cli.main feedback \
-  --verdict positive \
-  --collection <owner-repo>_code \
-  --comment "Clear answer and useful citations"
+ragops config show
+ragops config set --openai-api-key <key> --storage-backend sqlite --llm-enabled true
+ragops config doctor
 ```
 
-6. Run eval dataset:
+## Optional Repo Workflow
+
+For GitHub repo onboarding flows:
+
 ```bash
-.venv/bin/python -m services.cli.main eval --dataset ./eval/cases.yaml
+ragops repo add https://github.com/<org>/<repo> --ref main --generate-manuals
+ragops repo sync <owner-repo>
+ragops repo list
 ```
 
-Optional UI flow:
+## Documentation Map
+
+- MVP definition: `docs/mvp.md`
+- Scan output contract: `docs/scan-output-spec.md`
+- Product roadmap: `docs/roadmap.md`
+- API contract: `docs/api-contract.md`
+- User guide: `docs/user-guide.md`
+- Runbooks: `docs/runbooks.md`
+- MVP results: `docs/mvp-results.md`
+
+## Development
+
+Editable install:
+
 ```bash
-make mock-api
-make frontend
-```
-Open `http://127.0.0.1:4173`.
-
-## MVP API Surface
-
-- `GET /health`
-- `POST /v1/chat`
-- `POST /v1/feedback`
-- `POST /v1/repos/onboard` (async supported)
-- `POST /v1/query` (non-conversational retrieval/generation)
-
-Reference: `docs/api-contract.md`.
-
-## Architecture
-
-- Runtime: Python 3.11 services.
-- Vector DB: PostgreSQL 16 + `pgvector`.
-- Local dev: Docker Compose.
-- Cloud deploy: AWS Lambda + API Gateway + Terraform.
-
-## Project Structure
-
-```text
-.
-├── services/
-│   ├── api/
-│   ├── ingest/
-│   ├── core/
-│   └── cli/
-├── docs/
-├── frontend/
-├── eval/
-└── terraform/
+pip install -e ".[dev]"
 ```
 
-## Testing
+Run tests:
 
-Run all service tests:
 ```bash
 .venv/bin/python -m pytest services/ -q
 ```

@@ -31,6 +31,7 @@
 | Command | Summary |
 | --- | --- |
 | `ragops init` | Initialize ragops project config |
+| `ragops scan` | One-command local scan (ingest code + manuals) |
 | `ragops ingest` | Index docs/code into vector store |
 | `ragops query` | Ask grounded questions |
 | `ragops generate-docs` | Generate LLM-written docs from code context |

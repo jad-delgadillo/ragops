@@ -61,3 +61,27 @@ def test_collect_ingest_files_honors_extra_ignore_dirs(tmp_path: Path) -> None:
     files = collect_ingest_files(target, extra_ignore_dirs={"manuals"})
     assert good in files
     assert bad not in files
+
+
+def test_collect_ingest_files_can_limit_to_include_paths(tmp_path: Path) -> None:
+    target = tmp_path / "repo"
+    (target / "src").mkdir(parents=True)
+    (target / "docs").mkdir(parents=True)
+    keep = target / "src" / "main.py"
+    drop = target / "docs" / "guide.md"
+    keep.write_text("print('ok')\n")
+    drop.write_text("guide\n")
+
+    files = collect_ingest_files(target, include_paths={"src/main.py"})
+    assert keep in files
+    assert drop not in files
+
+
+def test_collect_ingest_files_empty_include_paths_returns_none(tmp_path: Path) -> None:
+    target = tmp_path / "repo"
+    (target / "src").mkdir(parents=True)
+    keep = target / "src" / "main.py"
+    keep.write_text("print('ok')\n")
+
+    files = collect_ingest_files(target, include_paths=set())
+    assert files == []

@@ -232,6 +232,7 @@ def _handle_chat(event: dict[str, Any]) -> dict[str, Any]:
         mode = body.get("mode", "default")
         answer_style = body.get("answer_style", "concise")
         include_context = bool(body.get("include_context", False))
+        include_ranking_signals = bool(body.get("include_ranking_signals", False))
         top_k = int(body.get("top_k", settings.top_k))
 
         if not question:
@@ -268,6 +269,7 @@ def _handle_chat(event: dict[str, Any]) -> dict[str, Any]:
             answer_style=selected_answer_style,
             collection=collection,
             top_k=top_k,
+            include_ranking_signals=include_ranking_signals,
             settings=settings,
         )
 
@@ -441,7 +443,7 @@ def _handle_repo_onboard(event: dict[str, Any]) -> dict[str, Any]:
         if not decision.allowed:
             return _forbidden(decision)
 
-        lazy_mode = _as_bool(body.get("lazy"), default=True)
+        lazy_mode = _as_bool(body.get("lazy"), default=False)
         request_payload = {
             "repo_url": repo_url,
             "ref": str(body.get("ref", "")).strip() or None,
@@ -598,7 +600,7 @@ def _execute_repo_onboard(*, request_payload: dict[str, Any], settings: Any) -> 
 
     Supports both lazy (file-tree-only) and full (clone + embed) modes.
     """
-    lazy = bool(request_payload.get("lazy", True))
+    lazy = bool(request_payload.get("lazy", False))
 
     if lazy:
         lazy_fn = onboard_github_repo_lazy

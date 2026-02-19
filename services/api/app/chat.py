@@ -7,8 +7,15 @@ import time
 from dataclasses import dataclass, field
 from uuid import uuid4
 
+from services.api.app.ownership import (
+    ownership_bonus_for_source,
+    ownership_debug_signals_for_source,
+    tokenize_question,
+)
 from services.core.config import Settings, get_settings
-from services.core.database import (
+from services.core.logging import timed_metric
+from services.core.providers import EmbeddingProvider, LLMProvider
+from services.core.storage import (
     count_chat_turns,
     ensure_chat_tables,
     get_connection,
@@ -18,8 +25,6 @@ from services.core.database import (
     upsert_chat_session,
     validate_embedding_dimension,
 )
-from services.core.logging import timed_metric
-from services.core.providers import EmbeddingProvider, LLMProvider
 
 CHAT_MODES = {
     "default",
@@ -46,8 +51,13 @@ PRIORITY_PATH_HINTS = (
     "docs/",
     "user-guide",
     "runbooks",
+    "project_overview.md",
+    "architecture_map.md",
     "codebase_manual.md",
     "api_manual.md",
+    "architecture_diagram.md",
+    "operations_runbook.md",
+    "unknowns_and_gaps.md",
     "database_manual.md",
     "services/cli/main.py",
 )
@@ -71,6 +81,16 @@ LOW_VALUE_PATH_HINTS = (
     ".pytest_cache\\",
     ".ruff_cache/",
     ".ruff_cache\\",
+)
+MANUAL_SOURCE_HINTS = (
+    "project_overview.md",
+    "architecture_map.md",
+    "codebase_manual.md",
+    "api_manual.md",
+    "architecture_diagram.md",
+    "operations_runbook.md",
+    "unknowns_and_gaps.md",
+    "database_manual.md",
 )
 CODE_DUMP_MARKERS = (
     "def ",
@@ -228,6 +248,7 @@ def source_bonus(
     *,
     broad_onboarding: bool,
     file_hints: set[str] | None = None,
+    question_tokens: set[str] | None = None,
 ) -> float:
     """Compute source-based rerank bonus for onboarding questions."""
     src = source.lower()
@@ -237,7 +258,11 @@ def source_bonus(
         bonus += 0.25
     if is_low_value_source(src):
         bonus -= 0.30
+    if question_tokens:
+        bonus += ownership_bonus_for_source(source, question_tokens=question_tokens)
     if broad_onboarding:
+        if is_manual_source(src):
+            bonus += 0.18
         if any(hint in src for hint in PRIORITY_PATH_HINTS):
             bonus += 0.12
         if is_high_level_source(src):
@@ -257,6 +282,42 @@ def is_high_level_source(source: str) -> bool:
     return any(hint in src for hint in HIGH_LEVEL_PATH_HINTS)
 
 
+def is_manual_source(source: str) -> bool:
+    """Return True when source appears to be a generated onboarding manual."""
+    src = source.lower()
+    return any(hint in src for hint in MANUAL_SOURCE_HINTS)
+
+
+def ranking_signals_for_source(
+    source: str,
+    *,
+    broad_onboarding: bool,
+    file_hints: set[str],
+    question_tokens: set[str],
+) -> list[str]:
+    """Return human-readable ranking signals for debug output."""
+    src = source.lower()
+    signals: list[str] = []
+    if is_manual_source(src):
+        signals.append("manual_source")
+    if is_high_level_source(src):
+        signals.append("high_level_doc")
+    if any(h in src for h in PRIORITY_PATH_HINTS):
+        signals.append("priority_path_hint")
+    if file_hints and any(hint in src for hint in file_hints):
+        signals.append("explicit_file_hint")
+    if is_low_value_source(src):
+        signals.append("low_value_source_demoted")
+    if broad_onboarding:
+        signals.append("broad_onboarding_query")
+    _, ownership_signals = ownership_debug_signals_for_source(
+        source,
+        question_tokens=question_tokens,
+    )
+    signals.extend(ownership_signals)
+    return signals
+
+
 def rerank_chunks(
     question: str,
     chunks: list[dict[str, object]],
@@ -265,16 +326,27 @@ def rerank_chunks(
     """Rerank raw vector results with lightweight onboarding-aware source priors."""
     broad = is_onboarding_question(question)
     file_hints = extract_file_hints(question)
+    question_tokens = tokenize_question(question)
     scored: list[tuple[float, dict[str, object]]] = []
     for chunk in chunks:
         similarity = float(chunk.get("similarity", 0.0))
         source = str(chunk.get("source_file", chunk.get("s3_key", "unknown")))
+        ranking_signals = ranking_signals_for_source(
+            source,
+            broad_onboarding=broad,
+            file_hints=file_hints,
+            question_tokens=question_tokens,
+        )
         score = similarity + source_bonus(
             source,
             broad_onboarding=broad,
             file_hints=file_hints,
+            question_tokens=question_tokens,
         )
-        scored.append((score, chunk))
+        enriched_chunk = dict(chunk)
+        enriched_chunk["ranking_signals"] = ranking_signals
+        enriched_chunk["ranking_score"] = round(score, 6)
+        scored.append((score, enriched_chunk))
     scored.sort(key=lambda item: item[0], reverse=True)
 
     preferred = [
@@ -320,14 +392,19 @@ def rerank_chunks(
     if not broad:
         return _select_diverse(ranked_chunks, top_k)
 
+    manual_level = []
     high_level = []
     code_level = []
     for chunk in ranked_chunks:
         source = str(chunk.get("source_file", chunk.get("s3_key", "unknown")))
-        if is_high_level_source(source):
+        if is_manual_source(source):
+            manual_level.append(chunk)
+        elif is_high_level_source(source):
             high_level.append(chunk)
         else:
             code_level.append(chunk)
+    if manual_level:
+        return _select_diverse(manual_level + high_level + code_level, top_k)
     minimum_docs = max(2, min(top_k, 3))
     if len(high_level) >= minimum_docs:
         return _select_diverse(high_level, top_k)
@@ -351,6 +428,7 @@ def build_context_snippets(
                 "line_end": chunk.get("line_end"),
                 "similarity": round(float(chunk.get("similarity", 0.0)), 4),
                 "content": excerpt,
+                "ranking_signals": chunk.get("ranking_signals", []),
             }
         )
     return snippets
@@ -493,6 +571,7 @@ def chat(
     answer_style: str = "concise",
     collection: str = "default",
     top_k: int = 5,
+    include_ranking_signals: bool = False,
     settings: Settings | None = None,
 ) -> ChatResult:
     """Execute conversational RAG with persisted memory."""
@@ -583,6 +662,11 @@ def chat(
                 "line_start": c.get("line_start"),
                 "line_end": c.get("line_end"),
                 "similarity": round(float(c.get("similarity", 0.0)), 4),
+                **(
+                    {"ranking_signals": c.get("ranking_signals", [])}
+                    if include_ranking_signals
+                    else {}
+                ),
             }
             for c in chunks
         ]

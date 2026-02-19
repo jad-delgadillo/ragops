@@ -82,6 +82,7 @@ def _chat_remote(
     answer_style: str = "concise",
     top_k: int = 5,
     include_context: bool = False,
+    include_ranking_signals: bool = False,
     api_key: str | None = None,
 ) -> Any:
     """Query remote chat endpoint and return a ChatResult-like object."""
@@ -95,6 +96,7 @@ def _chat_remote(
         "answer_style": answer_style,
         "top_k": top_k,
         "include_context": include_context,
+        "include_ranking_signals": include_ranking_signals,
     }
     if session_id:
         payload["session_id"] = session_id

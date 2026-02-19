@@ -2,6 +2,15 @@
 
 ## Local Development
 
+### Zero-dependency CLI (SQLite default)
+```bash
+ragops init
+ragops config doctor
+ragops config doctor --fix
+ragops scan
+ragops chat
+```
+
 ### Start the stack
 ```bash
 make dev          # starts Postgres + pgvector
@@ -11,6 +20,11 @@ make install      # install Python deps
 ### Ingest documents
 ```bash
 make ingest DIR=./docs
+```
+
+### One-command scan
+```bash
+.venv/bin/python -m services.cli.main scan
 ```
 
 ### Query

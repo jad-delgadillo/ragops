@@ -1,5 +1,5 @@
 # RAG Ops Platform
-.PHONY: dev dev-down ingest query chat feedback eval repo-add repo-sync repo-migrate repo-list frontend mock-api test lint fmt clean help
+.PHONY: dev dev-down ingest scan query chat feedback eval repo-add repo-add-lazy repo-sync repo-migrate repo-list frontend mock-api test lint fmt package package-check clean help
 
 # Use venv Python if available, otherwise system Python
 PYTHON := $(shell if [ -f .venv/bin/python ]; then echo .venv/bin/python; else echo python3; fi)
@@ -32,6 +32,12 @@ dev-reset: ## Reset database (delete volume + restart)
 install: ## Install dependencies
 	pip install -e ".[dev]"
 
+package: ## Build source and wheel distributions into dist/
+	$(PYTHON) -m build
+
+package-check: package ## Build packages and run metadata checks
+	$(PYTHON) -m twine check dist/*
+
 # ----------------------------------------------------------------
 # ragops CLI (v2 — recommended)
 # ----------------------------------------------------------------
@@ -40,6 +46,9 @@ init: ## Initialize ragops in a project (usage: make init DIR=../myproject)
 
 ingest: ## Ingest docs/code (usage: make ingest or make ingest DIR=./docs)
 	$(PYTHON) -m services.cli.main ingest $${DIR:+--dir $$DIR} $${PROJECT:+--project $$PROJECT}
+
+scan: ## One-command project scan (ingest + manuals)
+	$(PYTHON) -m services.cli.main scan $${COLLECTION:+--collection $$COLLECTION} $${OUTPUT:+--output $$OUTPUT}
 
 query: ## Query the project (usage: make query Q="your question")
 	$(PYTHON) -m services.cli.main query "$${Q:-How does this work?}" $${PROJECT:+--project $$PROJECT}
@@ -74,6 +83,14 @@ repo-add: ## Add GitHub repo (usage: make repo-add URL=... REF=main FORCE=1)
 		$${GENERATE_MANUALS:+--generate-manuals} \
 		$${MANUALS_COLLECTION:+--manuals-collection $$MANUALS_COLLECTION} \
 		$${MANUALS_OUTPUT:+--manuals-output $$MANUALS_OUTPUT} \
+		$${FORCE:+--force}
+
+repo-add-lazy: ## ⚡ Lazy-onboard a GitHub repo (instant, content embedded on-demand)
+	$(PYTHON) -m services.cli.main repo add-lazy "$${URL:?Set URL=https://github.com/org/repo}" \
+		$${NAME:+--name $$NAME} \
+		$${COLLECTION:+--collection $$COLLECTION} \
+		$${REF:+--ref $$REF} \
+		$${TOKEN:+--github-token $$TOKEN} \
 		$${FORCE:+--force}
 
 repo-sync: ## Sync tracked repo(s) (usage: make repo-sync NAME=owner-repo or ALL=1)

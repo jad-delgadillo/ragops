@@ -8,10 +8,12 @@
 | Table | Rows | Columns |
 | --- | --- | --- |
 | `answer_feedback` | 1 | 11 |
-| `chat_messages` | 8 | 7 |
-| `chat_sessions` | 2 | 6 |
-| `chunks` | 368 | 10 |
-| `documents` | 131 | 6 |
+| `chat_messages` | 142 | 7 |
+| `chat_sessions` | 38 | 6 |
+| `chunks` | 8254 | 10 |
+| `documents` | 2217 | 6 |
+| `repo_files` | 84 | 10 |
+| `repo_onboarding_jobs` | 5 | 11 |
 
 ## `answer_feedback`
 Rows: 1
@@ -35,7 +37,7 @@ Indexes:
 - `idx_answer_feedback_collection_created`: `CREATE INDEX idx_answer_feedback_collection_created ON public.answer_feedback USING btree (collection, created_at DESC)`
 
 ## `chat_messages`
-Rows: 8
+Rows: 142
 
 | Column | Type | Nullable | Default |
 | --- | --- | --- | --- |
@@ -52,7 +54,7 @@ Indexes:
 - `idx_chat_messages_session_id`: `CREATE INDEX idx_chat_messages_session_id ON public.chat_messages USING btree (session_id, id)`
 
 ## `chat_sessions`
-Rows: 2
+Rows: 38
 
 | Column | Type | Nullable | Default |
 | --- | --- | --- | --- |
@@ -67,7 +69,7 @@ Indexes:
 - `chat_sessions_pkey`: `CREATE UNIQUE INDEX chat_sessions_pkey ON public.chat_sessions USING btree (session_id)`
 
 ## `chunks`
-Rows: 368
+Rows: 8254
 
 | Column | Type | Nullable | Default |
 | --- | --- | --- | --- |
@@ -88,7 +90,7 @@ Indexes:
 - `idx_chunks_embedding`: `CREATE INDEX idx_chunks_embedding ON public.chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists='100')`
 
 ## `documents`
-Rows: 131
+Rows: 2217
 
 | Column | Type | Nullable | Default |
 | --- | --- | --- | --- |
@@ -103,4 +105,47 @@ Indexes:
 - `documents_pkey`: `CREATE UNIQUE INDEX documents_pkey ON public.documents USING btree (id)`
 - `idx_documents_collection`: `CREATE INDEX idx_documents_collection ON public.documents USING btree (collection)`
 - `idx_documents_sha256`: `CREATE UNIQUE INDEX idx_documents_sha256 ON public.documents USING btree (sha256, collection)`
+
+## `repo_files`
+Rows: 84
+
+| Column | Type | Nullable | Default |
+| --- | --- | --- | --- |
+| `id` | `bigint` | `false` | `nextval('repo_files_id_seq'::regclass)` |
+| `collection` | `character varying(128)` | `false` | `` |
+| `owner` | `character varying(128)` | `false` | `` |
+| `repo` | `character varying(128)` | `false` | `` |
+| `ref` | `character varying(128)` | `false` | `'main'::character varying` |
+| `file_path` | `text` | `false` | `` |
+| `file_sha` | `character varying(64)` | `true` | `` |
+| `file_size` | `integer` | `true` | `0` |
+| `embedded` | `boolean` | `false` | `false` |
+| `created_at` | `timestamp with time zone` | `false` | `now()` |
+
+Indexes:
+- `idx_repo_files_collection`: `CREATE INDEX idx_repo_files_collection ON public.repo_files USING btree (collection)`
+- `idx_repo_files_embedded`: `CREATE INDEX idx_repo_files_embedded ON public.repo_files USING btree (collection, embedded)`
+- `repo_files_pkey`: `CREATE UNIQUE INDEX repo_files_pkey ON public.repo_files USING btree (id)`
+- `repo_files_unique`: `CREATE UNIQUE INDEX repo_files_unique ON public.repo_files USING btree (collection, file_path)`
+
+## `repo_onboarding_jobs`
+Rows: 5
+
+| Column | Type | Nullable | Default |
+| --- | --- | --- | --- |
+| `job_id` | `character varying(64)` | `false` | `` |
+| `collection` | `character varying(128)` | `false` | `'default'::character varying` |
+| `principal` | `character varying(128)` | `false` | `'unknown'::character varying` |
+| `status` | `character varying(16)` | `false` | `'queued'::character varying` |
+| `request_payload` | `jsonb` | `false` | `'{}'::jsonb` |
+| `result` | `jsonb` | `true` | `'{}'::jsonb` |
+| `error` | `text` | `true` | `` |
+| `created_at` | `timestamp with time zone` | `false` | `now()` |
+| `updated_at` | `timestamp with time zone` | `false` | `now()` |
+| `started_at` | `timestamp with time zone` | `true` | `` |
+| `finished_at` | `timestamp with time zone` | `true` | `` |
+
+Indexes:
+- `idx_repo_onboarding_jobs_collection_created`: `CREATE INDEX idx_repo_onboarding_jobs_collection_created ON public.repo_onboarding_jobs USING btree (collection, created_at DESC)`
+- `repo_onboarding_jobs_pkey`: `CREATE UNIQUE INDEX repo_onboarding_jobs_pkey ON public.repo_onboarding_jobs USING btree (job_id)`
 

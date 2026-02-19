@@ -1,108 +1,106 @@
-# MVP Specification: GitHub Repo Onboarding Copilot
+# MVP Definition: CLI Codebase Onboarding Copilot
 
 ## Product Statement
 
-RAG Ops is a developer onboarding copilot that converts a GitHub repository into a citation-grounded Q&A assistant.
+RAG Ops helps engineers understand unfamiliar codebases fast.
 
-## Target User
+The MVP is a local CLI workflow:
+1. `ragops init`
+2. `ragops scan`
+3. `ragops chat`
 
-- Primary: engineers joining a new codebase.
-- Secondary: engineering managers and tech leads onboarding teammates.
+## User and Job To Be Done
 
-## Core User Journey
+Primary user:
+- Engineer joining or revisiting a codebase.
 
-1. User submits a GitHub repository URL.
-2. System ingests source files into `<collection>_code`.
-3. System optionally generates manuals and ingests them into `<collection>_manuals`.
-4. User asks onboarding questions in chat mode.
-5. System responds with concise grounded answers and citations.
-6. User records feedback to improve quality tracking.
+Core job:
+- "Get me from zero context to useful answers, with citations I can trust."
 
-## In Scope (MVP)
+## MVP Scope
 
-- Repo onboarding via CLI and API:
-  - Clone/download repo archive.
-  - Ingest code into isolated code collection.
-  - Optional manual generation and manual ingestion.
-- Conversational onboarding chat:
-  - Session continuity via `session_id`.
-  - Answer modes (`default`, `explain_like_junior`, etc.).
-  - Citation output (`source`, `line_start`, `line_end`, `similarity`).
-- Feedback loop:
-  - Positive/negative verdict.
-  - Optional metadata/comment capture.
-- Basic evaluation harness:
-  - Dataset-driven checks for source-hit and answer-hit.
-- Local-first setup:
-  - Docker Postgres + pgvector.
-  - CLI workflow for end-to-end validation.
+In scope:
+- Project initialization with local defaults (`ragops init`)
+- One-command indexing and manual generation (`ragops scan`)
+- Multi-turn, citation-grounded Q and A (`ragops chat`)
+- Session continuity across turns
+- Feedback capture (`ragops feedback`)
+- Repeatable quality checks (`ragops eval`)
 
-## Out of Scope (Now)
+Also in scope but secondary:
+- GitHub repo onboarding (`ragops repo add`, `/v1/repos/onboard`)
+- Optional frontend demo flow
 
-- S3-prefix ingestion for `/v1/ingest` in cloud runtime.
-- Bedrock provider production support.
-- Enterprise auth models beyond API keys.
-- Multi-tenant org/user management and billing.
-- Full observability stack (dashboards/alerts/tracing backend).
+## Non-Goals for This MVP
 
-## MVP Success Criteria
+- Billing and tenant management
+- Enterprise auth and role models
+- Full observability platform
+- Bedrock production path
+- `s3_prefix` ingestion implementation in `/v1/ingest`
 
-### Functional Acceptance
+## Scan Contract
 
-1. Given a valid public GitHub URL, onboarding completes and returns collection names.
-2. Chat answers use indexed context and return at least one citation for answerable questions.
-3. Feedback endpoint writes records for valid verdicts.
-4. Async onboarding returns `202` + `job_id`, and status polling reaches terminal state.
-5. Test suite passes locally (`pytest services/`).
+`ragops scan` must:
+1. Ingest project code into the selected collection.
+2. Generate onboarding manuals.
+3. Ingest those manuals so chat can use them immediately.
 
-### Demo Acceptance
+Required manual set includes:
+- `PROJECT_OVERVIEW.md`
+- `ARCHITECTURE_MAP.md`
+- `CODEBASE_MANUAL.md`
+- `API_MANUAL.md`
+- `ARCHITECTURE_DIAGRAM.md`
+- `OPERATIONS_RUNBOOK.md`
+- `UNKNOWNS_AND_GAPS.md`
+- `DATABASE_MANUAL.md`
+- `SCAN_INDEX.json`
 
-1. Complete flow can be shown in under 10 minutes:
-   - repo add/onboard
-   - first question
-   - follow-up question in same session
-   - feedback submit
-2. Demo includes at least one question where citation points to a concrete source file and line range.
+Detailed spec: `docs/scan-output-spec.md`.
 
-## Quality Metrics
+## Success Metrics
 
-Track per run (store in `docs/mvp-results.md`):
+Track each run in `docs/mvp-results.md`.
 
-- `onboarding_duration_seconds` (repo submit to ready).
-- `chat_p50_latency_ms`.
-- `chat_p95_latency_ms`.
-- `citation_coverage_rate`:
-  - percentage of non-empty answers that include >=1 citation.
-- `eval_source_hit_rate`.
-- `eval_answer_hit_rate`.
-- `feedback_positive_rate`.
+- `time_to_first_answer_seconds`
+- `scan_duration_seconds`
+- `chat_p50_latency_ms`
+- `chat_p95_latency_ms`
+- `citation_coverage_rate`
+- `eval_source_hit_rate`
+- `eval_answer_hit_rate`
+- `feedback_positive_rate`
 
-## Engineering Constraints
+Recommended initial targets:
+- `time_to_first_answer_seconds < 180`
+- `chat_p95_latency_ms < 5000`
+- `citation_coverage_rate >= 80%`
+- `eval_source_hit_rate >= 70%`
+- `eval_answer_hit_rate >= 70%`
 
-- Default provider path: OpenAI embeddings + OpenAI LLM.
-- Database schema currently expects 1536-dim vectors.
-- Chat quality guardrails should avoid raw code-dump answers when user asked for explanation.
+## Functional Acceptance Criteria
 
-## 2-Week Execution Plan
+1. In a new project directory, `init -> scan -> chat` runs end to end without Docker.
+2. Answerable chat questions include at least one citation with source and line range.
+3. Follow-up questions in the same session preserve context.
+4. `scan` generates the required manual set, including `ARCHITECTURE_DIAGRAM.md`.
+5. `feedback` accepts positive and negative verdicts and stores records.
+6. Service tests pass locally (`pytest services/`).
 
-### Week 1: Scope and Proof
+## Demo Acceptance Criteria
 
-1. Freeze scope to onboarding copilot features only.
-2. Rewrite README and docs around the MVP narrative.
-3. Harden golden path demo script.
-4. Expand eval dataset from smoke checks to onboarding-focused coverage.
-5. Add/adjust tests for onboarding async states and chat response shape.
+1. A first-time user can complete `init -> scan -> first answer` in under 10 minutes.
+2. Demo includes at least one answer citing a concrete file and line interval.
+3. Demo includes one follow-up question in the same session.
 
-### Week 2: Reliability and Evidence
+## Guardrails
 
-1. Tighten error messages and edge-case handling in onboarding/chat flows.
-2. Improve frontend status UX for onboarding and session continuity.
-3. Run repeated eval and collect KPI snapshots.
-4. Publish `docs/mvp-results.md` with measured results.
-5. Prepare short demo and final CV bullets backed by metrics.
+- Prefer grounded explanations over raw code dumps.
+- Keep manuals deterministic where possible and clearly mark inferred content.
+- Default to OpenAI embeddings plus OpenAI LLM for the stable path.
 
-## CV Positioning
+## Positioning
 
 Use this phrasing consistently:
-
-"Built a GitHub Repo Onboarding Copilot that ingests code/manuals and delivers citation-grounded, session-aware codebase Q&A with measurable quality feedback loops."
+"RAG Ops is a CLI onboarding copilot that indexes any codebase and answers questions with citations."

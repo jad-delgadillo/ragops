@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     """Central configuration — reads from env vars / .env file."""
 
     # --- Database ---
+    storage_backend: str = Field(default="auto", alias="STORAGE_BACKEND")
+    local_db_path: str = Field(default=".ragops/ragops.db", alias="LOCAL_DB_PATH")
     database_url: str | None = Field(default=None, alias="DATABASE_URL")
     neon_connection_string: str | None = Field(default=None, alias="NEON_CONNECTION_STRING")
     db_host: str = Field(default="localhost", alias="DB_HOST")
