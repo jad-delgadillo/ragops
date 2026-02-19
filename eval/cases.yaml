@@ -1,3 +1,6 @@
+# RAG Ops MVP Evaluation Dataset
+# Onboarding-focused cases for GitHub Repo Onboarding Copilot quality checks.
+
 - id: architecture-entrypoint
   question: "What is the main CLI entrypoint?"
   collection: "ragops"
@@ -13,3 +16,85 @@
     - "services/ingest/app/pipeline.py"
   expected_answer_contains:
     - "ingest"
+
+- id: architecture-discovery
+  question: "What is the overall architecture of this project?"
+  collection: "ragops"
+  expected_source_contains:
+    - "docs/architecture.md"
+  expected_answer_contains:
+    - "api"
+    - "cli"
+
+- id: first-files-to-read
+  question: "What files should I read first to understand this project?"
+  collection: "ragops"
+  expected_source_contains:
+    - "README.md"
+  expected_answer_contains:
+    - "readme"
+
+- id: deploy-run-flow
+  question: "How do I run this project locally?"
+  collection: "ragops"
+  expected_source_contains:
+    - "Makefile"
+  expected_answer_contains:
+    - "make"
+
+- id: api-endpoints
+  question: "What API endpoints does the platform expose?"
+  collection: "ragops"
+  expected_source_contains:
+    - "handler.py"
+  expected_answer_contains:
+    - "chat"
+
+- id: auth-behavior
+  question: "How does authentication work in the API?"
+  collection: "ragops"
+  expected_source_contains:
+    - "handler.py"
+  expected_answer_contains:
+    - "api"
+    - "key"
+
+- id: repo-onboarding-flow
+  question: "How does the repo onboarding process work?"
+  collection: "ragops"
+  expected_source_contains:
+    - "repo"
+  expected_answer_contains:
+    - "onboard"
+
+- id: cli-commands
+  question: "What CLI commands are available?"
+  collection: "ragops"
+  expected_source_contains:
+    - "services/cli/main.py"
+  expected_answer_contains:
+    - "query"
+
+- id: feedback-mechanism
+  question: "How does the feedback system work?"
+  collection: "ragops"
+  expected_source_contains:
+    - "handler.py"
+  expected_answer_contains:
+    - "feedback"
+
+- id: database-schema
+  question: "What does the database schema look like?"
+  collection: "ragops"
+  expected_source_contains:
+    - "schema.sql"
+  expected_answer_contains:
+    - "table"
+
+- id: config-settings
+  question: "What configuration settings does the application support?"
+  collection: "ragops"
+  expected_source_contains:
+    - "config.py"
+  expected_answer_contains:
+    - "settings"

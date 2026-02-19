@@ -414,3 +414,112 @@ def test_handle_repo_onboard_status_returns_result(monkeypatch: pytest.MonkeyPat
     assert body["status"] == "succeeded"
     assert body["job_id"] == "job-123"
     assert body["result"]["collection"] == "openai-python_code"
+
+
+def test_handle_repo_onboard_missing_repo_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Onboarding should return 400 when repo_url is missing."""
+    settings = Settings(_env_file=None, OPENAI_API_KEY="test", REPO_ONBOARDING_ENABLED="true")
+    monkeypatch.setattr("services.api.app.handler.get_settings", lambda: settings)
+    event = {"body": json.dumps({"collection": "test-collection"})}
+    response = _handle_repo_onboard(event)
+    assert response["statusCode"] == 400
+    body = json.loads(response["body"])
+    assert "repo_url" in body["error"].lower()
+
+
+def test_handle_repo_onboard_url_too_long(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Onboarding should return 400 when repo_url exceeds 500 characters."""
+    settings = Settings(_env_file=None, OPENAI_API_KEY="test", REPO_ONBOARDING_ENABLED="true")
+    monkeypatch.setattr("services.api.app.handler.get_settings", lambda: settings)
+    long_url = "https://github.com/" + "x" * 500
+    event = {"body": json.dumps({"repo_url": long_url})}
+    response = _handle_repo_onboard(event)
+    assert response["statusCode"] == 400
+    body = json.loads(response["body"])
+    assert "500" in body["error"] or "exceeds" in body["error"].lower()
+
+
+def test_handle_repo_onboard_status_missing_job_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Status check should return 400 when job_id is missing."""
+    settings = Settings(_env_file=None, OPENAI_API_KEY="test", REPO_ONBOARDING_ENABLED="true")
+    monkeypatch.setattr("services.api.app.handler.get_settings", lambda: settings)
+    event = {"body": json.dumps({"action": "status"})}
+    response = _handle_repo_onboard(event)
+    assert response["statusCode"] == 400
+    body = json.loads(response["body"])
+    assert "job_id" in body["error"].lower()
+
+
+def test_handle_repo_onboard_status_nonexistent_job(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Status check should return 404 for a non-existent job_id."""
+    settings = Settings(_env_file=None, OPENAI_API_KEY="test", REPO_ONBOARDING_ENABLED="true")
+    monkeypatch.setattr("services.api.app.handler.get_settings", lambda: settings)
+
+    class _DummyConn:
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("services.api.app.handler.get_connection", lambda _: _DummyConn())
+    monkeypatch.setattr(
+        "services.api.app.handler.ensure_repo_onboarding_jobs_table",
+        lambda _: None,
+    )
+    monkeypatch.setattr(
+        "services.api.app.handler.get_repo_onboarding_job",
+        lambda _, job_id: None,
+    )
+
+    event = {"body": json.dumps({"action": "status", "job_id": "nonexistent-id"})}
+    response = _handle_repo_onboard(event)
+    assert response["statusCode"] == 404
+    body = json.loads(response["body"])
+    assert "not found" in body["error"].lower()
+
+
+def test_handle_chat_response_contract_includes_citation_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Chat response citations should include required keys: source, line_start, line_end, similarity."""
+    settings = Settings(_env_file=None, OPENAI_API_KEY="test")
+
+    class _EmbedProvider:
+        dimension = 1536
+
+    citation = {
+        "source": "README.md",
+        "line_start": 1,
+        "line_end": 30,
+        "similarity": 0.9,
+    }
+
+    def _fake_chat(*args: Any, **kwargs: Any) -> ChatResult:
+        return ChatResult(
+            session_id="session-contract",
+            answer="RAG Ops ingests code and answers with citations.",
+            citations=[citation],
+            retrieved=1,
+            latency_ms=99.0,
+            mode="default",
+            turn_index=1,
+        )
+
+    monkeypatch.setattr("services.api.app.handler.get_settings", lambda: settings)
+    monkeypatch.setattr(
+        "services.api.app.handler.get_embedding_provider",
+        lambda _: _EmbedProvider(),
+    )
+    monkeypatch.setattr("services.api.app.handler.get_llm_provider", lambda _: None)
+    monkeypatch.setattr("services.api.app.handler.chat", _fake_chat)
+
+    event = {"body": json.dumps({"question": "What is this project?"})}
+    response = _handle_chat(event)
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    # Contract: session_id, answer, citations, mode, answer_style, turn_index
+    for key in ("session_id", "answer", "citations", "mode", "answer_style", "turn_index"):
+        assert key in body, f"Missing key '{key}' in chat response"
+    # Citation keys
+    assert len(body["citations"]) >= 1
+    for key in ("source", "line_start", "line_end", "similarity"):
+        assert key in body["citations"][0], f"Missing key '{key}' in citation"
+

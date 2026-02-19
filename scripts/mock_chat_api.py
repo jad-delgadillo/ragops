@@ -11,6 +11,7 @@ from uuid import uuid4
 
 SESSIONS: dict[str, list[dict[str, Any]]] = {}
 FEEDBACK: list[dict[str, Any]] = []
+ONBOARD_JOBS: dict[str, dict[str, Any]] = {}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -41,9 +42,14 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "status": "ok",
                     "service": "mock-chat-api",
-                    "routes": ["POST /v1/chat", "POST /v1/feedback"],
+                    "routes": [
+                        "POST /v1/chat",
+                        "POST /v1/feedback",
+                        "POST /v1/repos/onboard",
+                    ],
                     "sessions": len(SESSIONS),
                     "feedback_count": len(FEEDBACK),
+                    "onboard_jobs": len(ONBOARD_JOBS),
                 },
             )
             return
@@ -63,6 +69,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path.endswith("/v1/feedback"):
             self._handle_feedback(payload)
+            return
+        if self.path.endswith("/v1/repos/onboard"):
+            self._handle_repo_onboard(payload)
             return
         self._json(404, {"error": f"Not found: {self.path}"})
 
@@ -133,6 +142,74 @@ class Handler(BaseHTTPRequestHandler):
                 "collection": payload.get("collection", "default"),
             },
         )
+
+    def _handle_repo_onboard(self, payload: dict[str, Any]) -> None:
+        action = str(payload.get("action", "")).strip().lower()
+        if action == "status":
+            job_id = str(payload.get("job_id", "")).strip()
+            if not job_id:
+                self._json(400, {"error": "Field 'job_id' is required for action=status"})
+                return
+            job = ONBOARD_JOBS.get(job_id)
+            if not job:
+                self._json(404, {"error": f"Repo onboarding job not found: {job_id}"})
+                return
+            # Simulate progression: queued → running → succeeded
+            current = job["status"]
+            if current == "queued":
+                job["status"] = "running"
+            elif current == "running":
+                job["status"] = "succeeded"
+                job["result"] = {
+                    "collection": job["collection"] + "_code",
+                    "manuals_collection": job["collection"] + "_manuals",
+                    "name": job["collection"],
+                    "ingest": {"indexed_docs": 42, "skipped_docs": 3, "total_chunks": 256},
+                    "manual_ingest": {"indexed_docs": 5, "skipped_docs": 0, "total_chunks": 18},
+                }
+            response: dict[str, Any] = {
+                "status": job["status"],
+                "job_id": job_id,
+                "collection": job["collection"],
+            }
+            if job.get("result"):
+                response["result"] = job["result"]
+            if job.get("error"):
+                response["error"] = job["error"]
+            self._json(200, response)
+            return
+
+        repo_url = str(payload.get("repo_url", "")).strip()
+        if not repo_url:
+            self._json(400, {"error": "Field 'repo_url' is required"})
+            return
+
+        collection = str(payload.get("collection", "")).strip() or "mock-repo"
+        is_async = payload.get("async", False)
+
+        if is_async:
+            job_id = str(uuid4())
+            ONBOARD_JOBS[job_id] = {
+                "status": "queued",
+                "collection": collection,
+                "repo_url": repo_url,
+                "result": None,
+                "error": None,
+            }
+            self._json(202, {
+                "status": "queued",
+                "job_id": job_id,
+                "collection": collection,
+            })
+        else:
+            self._json(200, {
+                "status": "ok",
+                "collection": collection + "_code",
+                "manuals_collection": collection + "_manuals",
+                "name": collection,
+                "ingest": {"indexed_docs": 42, "skipped_docs": 3, "total_chunks": 256},
+                "manual_ingest": {"indexed_docs": 5, "skipped_docs": 0, "total_chunks": 18},
+            })
 
     def log_message(self, format: str, *args: Any) -> None:
         return

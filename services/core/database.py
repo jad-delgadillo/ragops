@@ -688,6 +688,153 @@ def mark_repo_onboarding_job_failed(
 
 
 # ---------------------------------------------------------------------------
+# Lazy RAG — repo file tree tracking
+# ---------------------------------------------------------------------------
+
+
+def ensure_repo_files_table(conn: psycopg.Connection) -> None:
+    """Create repo_files table if it does not exist."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS repo_files (
+            id              BIGSERIAL PRIMARY KEY,
+            collection      VARCHAR(128) NOT NULL,
+            owner           VARCHAR(128) NOT NULL,
+            repo            VARCHAR(128) NOT NULL,
+            ref             VARCHAR(128) NOT NULL DEFAULT 'main',
+            file_path       TEXT NOT NULL,
+            file_sha        VARCHAR(64),
+            file_size       INTEGER DEFAULT 0,
+            embedded        BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            CONSTRAINT repo_files_unique UNIQUE (collection, file_path)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_repo_files_collection
+            ON repo_files (collection)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_repo_files_embedded
+            ON repo_files (collection, embedded)
+        """
+    )
+    conn.commit()
+
+
+def upsert_file_tree(
+    conn: psycopg.Connection,
+    *,
+    collection: str,
+    owner: str,
+    repo: str,
+    ref: str,
+    files: list[dict[str, Any]],
+) -> int:
+    """Bulk upsert file tree entries. Returns count of upserted rows."""
+    ensure_repo_files_table(conn)
+    count = 0
+    with conn.cursor() as cur:
+        for f in files:
+            cur.execute(
+                """
+                INSERT INTO repo_files (collection, owner, repo, ref, file_path, file_sha, file_size)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (collection, file_path)
+                DO UPDATE SET
+                    file_sha = EXCLUDED.file_sha,
+                    file_size = EXCLUDED.file_size,
+                    ref = EXCLUDED.ref
+                """,
+                (
+                    collection,
+                    owner,
+                    repo,
+                    ref,
+                    f["path"],
+                    f.get("sha", ""),
+                    f.get("size", 0),
+                ),
+            )
+            count += 1
+    conn.commit()
+    return count
+
+
+def get_unembedded_files(
+    conn: psycopg.Connection,
+    *,
+    collection: str,
+    paths: list[str],
+) -> list[str]:
+    """Return subset of paths that have NOT been embedded yet."""
+    ensure_repo_files_table(conn)
+    if not paths:
+        return []
+
+    # Build parameterized query for the IN clause
+    placeholders = ", ".join(["%s"] * len(paths))
+    rows = conn.execute(
+        f"""
+        SELECT file_path FROM repo_files
+        WHERE collection = %s
+          AND file_path IN ({placeholders})
+          AND embedded = FALSE
+        """,
+        [collection, *paths],
+    ).fetchall()
+    return [row["file_path"] for row in rows]
+
+
+def mark_files_embedded(
+    conn: psycopg.Connection,
+    *,
+    collection: str,
+    paths: list[str],
+) -> int:
+    """Mark files as embedded. Returns count of updated rows."""
+    if not paths:
+        return 0
+    placeholders = ", ".join(["%s"] * len(paths))
+    result = conn.execute(
+        f"""
+        UPDATE repo_files
+        SET embedded = TRUE
+        WHERE collection = %s
+          AND file_path IN ({placeholders})
+        """,
+        [collection, *paths],
+    )
+    conn.commit()
+    return result.rowcount
+
+
+def get_repo_meta(
+    conn: psycopg.Connection,
+    *,
+    collection: str,
+) -> dict[str, Any] | None:
+    """Get owner/repo/ref metadata for a lazy-onboarded collection."""
+    ensure_repo_files_table(conn)
+    row = conn.execute(
+        """
+        SELECT owner, repo, ref, COUNT(*) AS file_count,
+               COUNT(*) FILTER (WHERE embedded) AS embedded_count
+        FROM repo_files
+        WHERE collection = %s
+        GROUP BY owner, repo, ref
+        LIMIT 1
+        """,
+        (collection,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+# ---------------------------------------------------------------------------
 # Health check
 # ---------------------------------------------------------------------------
 

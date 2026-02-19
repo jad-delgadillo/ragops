@@ -19,8 +19,12 @@ from services.cli.repositories import (
     parse_github_repo_url,
     resolve_collection_pair,
 )
-from services.core.config import Settings
-from services.core.database import get_connection, purge_collection_documents
+from services.core.config import Settings, get_settings
+from services.core.database import (
+    get_connection,
+    purge_collection_documents,
+    upsert_file_tree,
+)
 from services.core.providers import get_embedding_provider
 from services.ingest.app.pipeline import ingest_local_directory
 
@@ -258,3 +262,191 @@ def onboard_github_repo(
         ),
         manuals_output=str(manuals_output_path) if manuals_output_path else None,
     )
+
+
+# ---------------------------------------------------------------------------
+# Lazy onboarding — file tree only, no full download
+# ---------------------------------------------------------------------------
+
+import logging
+
+_lazy_logger = logging.getLogger(__name__)
+
+
+@dataclass
+class LazyOnboardingResult:
+    """Result payload for lazy (file-tree-only) onboarding."""
+
+    name: str
+    url: str
+    ref: str
+    collection: str
+    tree_collection: str
+    total_files: int
+    embeddable_files: int
+    mode: str = "lazy"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "url": self.url,
+            "ref": self.ref,
+            "collection": self.collection,
+            "tree_collection": self.tree_collection,
+            "total_files": self.total_files,
+            "embeddable_files": self.embeddable_files,
+            "mode": self.mode,
+        }
+
+
+def onboard_github_repo_lazy(
+    *,
+    repo_url: str,
+    settings: Settings,
+    ref: str | None = None,
+    name: str | None = None,
+    collection: str | None = None,
+) -> LazyOnboardingResult:
+    """Fetch file tree from GitHub and embed file paths only (instant onboarding).
+
+    This is the lazy RAG approach:
+    1. Fetch file tree via GitHub Trees API (single API call, instant)
+    2. Filter to embeddable files (same rules as ingest pipeline)
+    3. Embed file paths as lightweight chunks in {collection}_tree collection
+    4. Store file metadata in repo_files table
+    5. Return immediately — actual file content is embedded on-demand per query
+    """
+    from services.core.github_tree import (
+        fetch_file_tree,
+        filter_embeddable_files,
+    )
+
+    canonical_url, owner, repo = parse_github_repo_url(repo_url)
+    repo_name = _sanitize_repo_key(name or default_repo_name(owner, repo))
+    code_collection = collection or repo_name
+    tree_collection = f"{code_collection}_tree"
+    active_ref = (ref or "main").strip() or "main"
+    token = (settings.github_token or "").strip() or None
+
+    # 1. Fetch file tree from GitHub API
+    _lazy_logger.info("Fetching file tree for %s/%s@%s", owner, repo, active_ref)
+    all_files = fetch_file_tree(
+        owner=owner,
+        repo=repo,
+        ref=active_ref,
+        token=token,
+    )
+    _lazy_logger.info("Got %d total files from GitHub", len(all_files))
+
+    # 2. Filter to embeddable files
+    embeddable = filter_embeddable_files(all_files)
+    _lazy_logger.info("Filtered to %d embeddable files", len(embeddable))
+
+    if not embeddable:
+        return LazyOnboardingResult(
+            name=repo_name,
+            url=canonical_url,
+            ref=active_ref,
+            collection=code_collection,
+            tree_collection=tree_collection,
+            total_files=len(all_files),
+            embeddable_files=0,
+        )
+
+    # 3. Purge old tree collection and embed file paths
+    conn = get_connection(settings)
+    try:
+        purge_collection_documents(conn, collection=tree_collection)
+    finally:
+        conn.close()
+
+    provider = get_embedding_provider(settings)
+    # Build path strings for embedding — include directory structure context
+    path_texts = []
+    for f in embeddable:
+        # Create a descriptive text for each file path for better semantic matching
+        path = f["path"]
+        parts = path.rsplit("/", 1)
+        if len(parts) == 2:
+            dir_part, file_part = parts
+            desc = f"File: {path} (in directory: {dir_part}, filename: {file_part})"
+        else:
+            desc = f"File: {path} (root file, filename: {path})"
+        path_texts.append(desc)
+
+    # Embed in batches and upsert as chunks
+    from services.core.database import (
+        compute_sha256,
+        upsert_chunks,
+        upsert_document,
+        validate_embedding_dimension,
+    )
+    from services.core.logging import timed_metric
+
+    conn = get_connection(settings)
+    try:
+        validate_embedding_dimension(conn, provider.dimension)
+
+        # Embed all path descriptions
+        with timed_metric("RagOps", "EmbeddingLatencyMs"):
+            embeddings = provider.embed(path_texts)
+
+        # Create a single document for the tree
+        tree_sha = compute_sha256("\n".join(path_texts))
+        doc_id = upsert_document(
+            conn,
+            s3_key=f"tree:{owner}/{repo}@{active_ref}",
+            sha256=tree_sha,
+            collection=tree_collection,
+            metadata={
+                "type": "file_tree",
+                "owner": owner,
+                "repo": repo,
+                "ref": active_ref,
+                "file_count": len(embeddable),
+            },
+        )
+
+        # Create one chunk per file path
+        chunk_records = [
+            {
+                "chunk_index": i,
+                "content": path_texts[i],
+                "embedding": embeddings[i],
+                "token_count": len(path_texts[i].split()),
+                "source_file": embeddable[i]["path"],
+                "line_start": 0,
+                "line_end": 0,
+            }
+            for i in range(len(embeddable))
+        ]
+        upsert_chunks(conn, doc_id, chunk_records)
+
+        # 4. Store file metadata in repo_files table
+        upsert_file_tree(
+            conn,
+            collection=code_collection,
+            owner=owner,
+            repo=repo,
+            ref=active_ref,
+            files=embeddable,
+        )
+    finally:
+        conn.close()
+
+    _lazy_logger.info(
+        "Lazy onboarding complete: %d embeddable files indexed for %s",
+        len(embeddable),
+        repo_name,
+    )
+
+    return LazyOnboardingResult(
+        name=repo_name,
+        url=canonical_url,
+        ref=active_ref,
+        collection=code_collection,
+        tree_collection=tree_collection,
+        total_files=len(all_files),
+        embeddable_files=len(embeddable),
+    )
+

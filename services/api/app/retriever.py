@@ -221,6 +221,214 @@ def retrieve(
     return rerank_query_chunks(question=question, chunks=raw_results, top_k=top_k)
 
 
+# ---------------------------------------------------------------------------
+# Lazy RAG: on-demand embedding + two-stage retrieval
+# ---------------------------------------------------------------------------
+
+
+def embed_files_on_demand(
+    *,
+    collection: str,
+    paths: list[str],
+    embedding_provider: EmbeddingProvider,
+    settings: Settings,
+) -> int:
+    """Fetch file contents from GitHub and embed them into the collection.
+
+    Only embeds files not already marked as embedded in repo_files.
+    Returns the number of newly embedded files.
+    """
+    from services.core.database import (
+        compute_sha256,
+        get_repo_meta,
+        get_unembedded_files,
+        mark_files_embedded,
+        upsert_chunks,
+        upsert_document,
+        validate_embedding_dimension,
+    )
+    from services.core.github_tree import fetch_files_content
+    from services.ingest.app.chunker import chunk_text, normalize_text
+
+    conn = get_connection(settings)
+    try:
+        # Get repo metadata (owner, repo, ref) from repo_files table
+        meta = get_repo_meta(conn, collection=collection)
+        if not meta:
+            logger.warning("No repo metadata found for collection %s — skipping on-demand embed", collection)
+            return 0
+
+        # Find which paths are not yet embedded
+        unembedded = get_unembedded_files(conn, collection=collection, paths=paths)
+        if not unembedded:
+            logger.debug("All %d requested files already embedded for %s", len(paths), collection)
+            return 0
+
+        logger.info("Fetching %d unembedded files from GitHub for %s", len(unembedded), collection)
+
+        # Fetch content from GitHub
+        token = (settings.github_token or "").strip() or None
+        contents = fetch_files_content(
+            owner=meta["owner"],
+            repo=meta["repo"],
+            paths=unembedded,
+            ref=meta["ref"],
+            token=token,
+        )
+
+        if not contents:
+            logger.warning("No file contents fetched for %s", collection)
+            return 0
+
+        validate_embedding_dimension(conn, embedding_provider.dimension)
+
+        embedded_count = 0
+        embedded_paths: list[str] = []
+
+        for file_path, raw_content in contents.items():
+            text = normalize_text(raw_content)
+            if not text:
+                logger.debug("Skipping empty file: %s", file_path)
+                continue
+
+            sha = compute_sha256(text)
+            chunks = chunk_text(
+                text,
+                chunk_size=settings.chunk_size,
+                chunk_overlap=settings.chunk_overlap,
+                source_file=file_path,
+            )
+            if not chunks:
+                continue
+
+            chunk_texts = [c.content for c in chunks]
+            with timed_metric("RagOps", "EmbeddingLatencyMs"):
+                embeddings = embedding_provider.embed(chunk_texts)
+
+            doc_id = upsert_document(
+                conn,
+                s3_key=file_path,
+                sha256=sha,
+                collection=collection,
+                metadata={"filename": file_path.rsplit("/", 1)[-1], "lazy_embedded": True},
+            )
+
+            chunk_records = [
+                {
+                    "chunk_index": chunk.chunk_index,
+                    "content": chunk.content,
+                    "embedding": emb,
+                    "token_count": chunk.token_count,
+                    "source_file": chunk.source_file,
+                    "line_start": chunk.line_start,
+                    "line_end": chunk.line_end,
+                }
+                for chunk, emb in zip(chunks, embeddings)
+            ]
+            upsert_chunks(conn, doc_id, chunk_records)
+            embedded_count += 1
+            embedded_paths.append(file_path)
+            logger.info("On-demand embedded %s: %d chunks", file_path, len(chunk_records))
+
+        # Mark files as embedded
+        if embedded_paths:
+            mark_files_embedded(conn, collection=collection, paths=embedded_paths)
+
+        return embedded_count
+    finally:
+        conn.close()
+
+
+def retrieve_lazy(
+    question: str,
+    embedding_provider: EmbeddingProvider,
+    *,
+    collection: str = "default",
+    top_k: int = 5,
+    settings: Settings | None = None,
+) -> list[dict[str, Any]]:
+    """Two-stage lazy retrieval.
+
+    Stage 1: Search the {collection}_tree collection for relevant file paths.
+    Stage 2: Fetch + embed those files on-demand, then search actual content.
+
+    Falls back to normal retrieval if no tree collection exists.
+    """
+    s = settings or get_settings()
+    tree_collection = f"{collection}_tree"
+
+    # Stage 1: Find relevant file paths from tree embeddings
+    conn = get_connection(s)
+    try:
+        validate_embedding_dimension(conn, embedding_provider.dimension)
+        with timed_metric("RagOps", "EmbeddingLatencyMs"):
+            query_embedding = embedding_provider.embed([question])[0]
+
+        # Check if tree collection exists by searching it
+        tree_results = search_vectors(
+            conn,
+            query_embedding,
+            collection=tree_collection,
+            top_k=max(top_k * 3, 15),  # Get more paths for better coverage
+        )
+    finally:
+        conn.close()
+
+    if not tree_results:
+        # No tree collection — fall back to normal retrieval
+        logger.info("No tree results for %s, falling back to normal retrieval", collection)
+        return retrieve(
+            question,
+            embedding_provider,
+            collection=collection,
+            top_k=top_k,
+            settings=s,
+        )
+
+    # Extract file paths from tree results
+    relevant_paths = []
+    for result in tree_results:
+        source = result.get("source_file", "")
+        if source:
+            relevant_paths.append(source)
+    relevant_paths = list(dict.fromkeys(relevant_paths))  # dedupe preserving order
+
+    logger.info(
+        "Lazy retrieval found %d relevant file paths for collection %s",
+        len(relevant_paths),
+        collection,
+    )
+
+    # Stage 2: Embed files on-demand
+    newly_embedded = embed_files_on_demand(
+        collection=collection,
+        paths=relevant_paths,
+        embedding_provider=embedding_provider,
+        settings=s,
+    )
+    if newly_embedded > 0:
+        logger.info("On-demand embedded %d files for %s", newly_embedded, collection)
+
+    # Stage 3: Search the actual content collection
+    conn = get_connection(s)
+    try:
+        with timed_metric("RagOps", "QueryLatencyMs"):
+            raw_results = search_vectors(
+                conn,
+                query_embedding,
+                collection=collection,
+                top_k=max(top_k * 6, top_k),
+            )
+    finally:
+        conn.close()
+
+    if not raw_results:
+        # Fall back to tree results as context (paths only)
+        return rerank_query_chunks(question=question, chunks=tree_results, top_k=top_k)
+
+    return rerank_query_chunks(question=question, chunks=raw_results, top_k=top_k)
+
+
 def query(
     question: str,
     embedding_provider: EmbeddingProvider,

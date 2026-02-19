@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from services.cli.repositories import (
     RepoRecord,
     build_authenticated_clone_url,
@@ -88,3 +90,19 @@ def test_repo_registry_round_trip(tmp_path: Path) -> None:
     assert loaded_record.collection == original["openai-openai-python"].collection
     assert loaded_record.manuals_enabled
     assert loaded_record.manuals_collection == "openai-openai-python_manuals"
+
+
+def test_parse_github_repo_url_empty_raises() -> None:
+    with pytest.raises(ValueError, match="required"):
+        parse_github_repo_url("")
+
+
+def test_parse_github_repo_url_non_github_raises() -> None:
+    with pytest.raises(ValueError, match="github.com"):
+        parse_github_repo_url("https://gitlab.com/org/repo")
+
+
+def test_parse_github_repo_url_missing_repo_name_raises() -> None:
+    with pytest.raises(ValueError, match="owner and repository"):
+        parse_github_repo_url("https://github.com/only-owner")
+

@@ -95,3 +95,26 @@ CREATE TABLE IF NOT EXISTS answer_feedback (
 
 CREATE INDEX IF NOT EXISTS idx_answer_feedback_collection_created
     ON answer_feedback (collection, created_at DESC);
+
+-- ----------------------------------------------------------------
+-- Repo files — lazy RAG file tree tracking
+-- ----------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS repo_files (
+    id              BIGSERIAL PRIMARY KEY,
+    collection      VARCHAR(128) NOT NULL,
+    owner           VARCHAR(128) NOT NULL,
+    repo            VARCHAR(128) NOT NULL,
+    ref             VARCHAR(128) NOT NULL DEFAULT 'main',
+    file_path       TEXT NOT NULL,
+    file_sha        VARCHAR(64),
+    file_size       INTEGER DEFAULT 0,
+    embedded        BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT repo_files_unique UNIQUE (collection, file_path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_repo_files_collection
+    ON repo_files (collection);
+
+CREATE INDEX IF NOT EXISTS idx_repo_files_embedded
+    ON repo_files (collection, embedded);

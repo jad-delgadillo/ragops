@@ -61,7 +61,7 @@ eval: ## Run eval dataset (usage: make eval DATASET=./eval/cases.yaml)
 	$(PYTHON) -m services.cli.main eval --dataset "$${DATASET:-./eval/cases.yaml}" \
 		$${COLLECTION:+--collection $$COLLECTION} $${TOPK:+--top-k $$TOPK}
 
-repo-add: ## Add GitHub repo (usage: make repo-add URL=... REF=main)
+repo-add: ## Add GitHub repo (usage: make repo-add URL=... REF=main FORCE=1)
 	$(PYTHON) -m services.cli.main repo add "$${URL:?Set URL=https://github.com/org/repo}" \
 		$${NAME:+--name $$NAME} \
 		$${COLLECTION:+--collection $$COLLECTION} \
@@ -73,7 +73,8 @@ repo-add: ## Add GitHub repo (usage: make repo-add URL=... REF=main)
 		$${RESET_MANUALS:+--reset-manuals-collection} \
 		$${GENERATE_MANUALS:+--generate-manuals} \
 		$${MANUALS_COLLECTION:+--manuals-collection $$MANUALS_COLLECTION} \
-		$${MANUALS_OUTPUT:+--manuals-output $$MANUALS_OUTPUT}
+		$${MANUALS_OUTPUT:+--manuals-output $$MANUALS_OUTPUT} \
+		$${FORCE:+--force}
 
 repo-sync: ## Sync tracked repo(s) (usage: make repo-sync NAME=owner-repo or ALL=1)
 	$(PYTHON) -m services.cli.main repo sync \
@@ -108,6 +109,9 @@ frontend: ## Serve onboarding chat UI at http://localhost:4173
 
 mock-api: ## Start mock /v1/chat + /v1/feedback API at http://localhost:8090
 	$(PYTHON) scripts/mock_chat_api.py --port 8090
+
+local-api: ## Start REAL local API (wraps Lambda handler) at http://localhost:8090
+	$(PYTHON) scripts/local_api.py --port 8090
 
 # ----------------------------------------------------------------
 # Testing

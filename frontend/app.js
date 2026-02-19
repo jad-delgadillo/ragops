@@ -79,6 +79,7 @@ function setStatus(text, kind = "idle") {
 function setSending(active) {
   state.sending = active;
   el.sendBtn.disabled = active;
+  el.sendBtn.textContent = active ? "Sending..." : "Send";
   el.question.disabled = active;
 }
 
@@ -356,6 +357,7 @@ async function submitRepoOnboard() {
     generate_manuals: el.repoGenerateManuals?.checked ?? true,
     reset_code_collection: el.repoResetCollections?.checked ?? true,
     reset_manuals_collection: el.repoResetCollections?.checked ?? true,
+    lazy: true,
     async: true,
   };
   const res = await fetch(endpoint(el.apiUrl.value, "/v1/repos/onboard"), {
@@ -492,14 +494,22 @@ if (el.repoOnboardBtn) {
         el.repoCollection.value = data.name || "";
       }
       saveSettings();
-      const indexed = data.ingest?.indexed_docs ?? 0;
-      const chunks = data.ingest?.total_chunks ?? 0;
-      setRepoStatus(`Ready: ${data.collection}`, "idle");
-      setStatus(`Repo onboarded (${indexed} files, ${chunks} chunks)`, "idle");
+      const isLazy = data.mode === "lazy";
+      if (isLazy) {
+        const fileCount = data.embeddable_files ?? 0;
+        setRepoStatus(`Ready: ${data.collection}`, "idle");
+        setStatus(`Lazy onboarded (${fileCount} files indexed). Content embedded on-demand per query.`, "idle");
+      } else {
+        const indexed = data.ingest?.indexed_docs ?? 0;
+        const chunks = data.ingest?.total_chunks ?? 0;
+        setRepoStatus(`Ready: ${data.collection}`, "idle");
+        setStatus(`Repo onboarded (${indexed} files, ${chunks} chunks)`, "idle");
+      }
     } catch (err) {
       console.error(err);
       setRepoStatus("Failed", "error");
-      setStatus("Repo onboarding failed", "error");
+      const errMsg = err.message || String(err);
+      setStatus(`Onboarding failed: ${errMsg.slice(0, 80)}`, "error");
       addAssistantMessage({
         question: "",
         answer: String(err),

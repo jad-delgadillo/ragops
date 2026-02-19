@@ -539,6 +539,41 @@ def chat(
                 collection=collection,
                 top_k=max(top_k * 2, top_k),
             )
+
+        # Lazy RAG: if no content chunks found, try on-demand embedding
+        if not raw_chunks:
+            from services.api.app.retriever import embed_files_on_demand
+
+            tree_collection = f"{collection}_tree"
+            tree_results = search_vectors(
+                conn,
+                query_embedding,
+                collection=tree_collection,
+                top_k=max(top_k * 3, 15),
+            )
+            if tree_results:
+                relevant_paths = list(
+                    dict.fromkeys(
+                        r.get("source_file", "")
+                        for r in tree_results
+                        if r.get("source_file")
+                    )
+                )
+                conn.close()
+                embed_files_on_demand(
+                    collection=collection,
+                    paths=relevant_paths,
+                    embedding_provider=embedding_provider,
+                    settings=s,
+                )
+                conn = get_connection(s)
+                raw_chunks = search_vectors(
+                    conn,
+                    query_embedding,
+                    collection=collection,
+                    top_k=max(top_k * 2, top_k),
+                )
+
         chunks = rerank_chunks(question, raw_chunks, top_k=top_k)
         context_snippets = build_context_snippets(chunks, limit=min(max(top_k, 1), 8))
 

@@ -46,9 +46,10 @@ COMMON_CORS_HEADERS = {
 }
 
 try:
-    from services.api.app.repo_onboarding import onboard_github_repo
+    from services.api.app.repo_onboarding import onboard_github_repo, onboard_github_repo_lazy
 except Exception:  # pragma: no cover - lazy fallback when optional deps are absent
     onboard_github_repo = None
+    onboard_github_repo_lazy = None
 
 
 def lambda_handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
@@ -440,6 +441,7 @@ def _handle_repo_onboard(event: dict[str, Any]) -> dict[str, Any]:
         if not decision.allowed:
             return _forbidden(decision)
 
+        lazy_mode = _as_bool(body.get("lazy"), default=True)
         request_payload = {
             "repo_url": repo_url,
             "ref": str(body.get("ref", "")).strip() or None,
@@ -452,6 +454,7 @@ def _handle_repo_onboard(event: dict[str, Any]) -> dict[str, Any]:
                 body.get("reset_manuals_collection"),
                 default=True,
             ),
+            "lazy": lazy_mode,
         }
         async_requested = _as_bool(
             body.get("async"),
@@ -591,7 +594,26 @@ def _handle_repo_onboard_status(
 
 
 def _execute_repo_onboard(*, request_payload: dict[str, Any], settings: Any) -> Any:
-    """Run repo onboarding synchronously and return RepoOnboardingResult."""
+    """Run repo onboarding synchronously and return result.
+
+    Supports both lazy (file-tree-only) and full (clone + embed) modes.
+    """
+    lazy = bool(request_payload.get("lazy", True))
+
+    if lazy:
+        lazy_fn = onboard_github_repo_lazy
+        if lazy_fn is None:
+            from services.api.app.repo_onboarding import (
+                onboard_github_repo_lazy as lazy_fn,
+            )
+        return lazy_fn(
+            repo_url=str(request_payload.get("repo_url", "")).strip(),
+            settings=settings,
+            ref=request_payload.get("ref"),
+            name=request_payload.get("name"),
+            collection=request_payload.get("collection"),
+        )
+
     onboard_fn = onboard_github_repo
     if onboard_fn is None:
         from services.api.app.repo_onboarding import onboard_github_repo as onboard_fn
