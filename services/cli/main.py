@@ -76,6 +76,21 @@ def _apply_user_profile_defaults() -> None:
             os.environ[key] = value
 
 
+def _coerce_bool(value: object, default: bool = False) -> bool:
+    """Coerce mixed config values into bool."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return default
+
+
 def _run_git(root: Path, args: list[str]) -> str:
     """Run a git command and return stdout or raise RuntimeError."""
     proc = subprocess.run(
@@ -652,6 +667,30 @@ def _citation_summary(citations: list[dict[str, object]], *, limit: int = 3) -> 
     return ", ".join(chunks) + suffix
 
 
+def _citation_signal_summary(
+    citations: list[dict[str, object]],
+    *,
+    source_limit: int = 2,
+    signal_limit: int = 3,
+) -> str:
+    """Create one-line ranking signal summary for shell-mode transcript."""
+    if not citations:
+        return ""
+    pieces: list[str] = []
+    for cite in citations[:source_limit]:
+        source = str(cite.get("source", "unknown")).split("/")[-1]
+        signals = cite.get("ranking_signals", [])
+        normalized = [str(s) for s in signals][:signal_limit]
+        if not normalized:
+            continue
+        pieces.append(f"{source}({', '.join(normalized)})")
+    if not pieces:
+        return ""
+    remaining = len(citations) - min(len(citations), source_limit)
+    suffix = f" (+{remaining} more sources)" if remaining > 0 else ""
+    return "; ".join(pieces) + suffix
+
+
 def _parse_chat_shell_command(raw: str) -> tuple[str, str]:
     """Parse `/command arg` input. Empty command returns ('', '')."""
     text = raw.strip()
@@ -670,6 +709,7 @@ def _render_chat_shell(
     session_id: str | None,
     provider_label: str,
     turns: list[_ChatShellTurn],
+    show_ranking_signals: bool = False,
     status_message: str = "",
 ) -> None:
     """Render codex-like chat shell screen for interactive mode."""
@@ -688,6 +728,7 @@ def _render_chat_shell(
         f"[cyan]session:[/cyan] {session_label}",
         f"[cyan]mode:[/cyan] {mode}    [dim]/model {mode}[/dim]",
         f"[cyan]style:[/cyan] {answer_style}    [dim]/style {answer_style}[/dim]",
+        f"[cyan]ranking signals:[/cyan] {'on' if show_ranking_signals else 'off'}",
     ]
     console.print(Panel("\n".join(header), border_style="bright_blue"))
     console.print(
@@ -720,6 +761,10 @@ def _render_chat_shell(
             sources = _citation_summary(turn.citations)
             if sources:
                 console.print(f"[dim]Sources: {sources}[/dim]")
+            if show_ranking_signals:
+                signal_summary = _citation_signal_summary(turn.citations)
+                if signal_summary:
+                    console.print(f"[dim]Signals: {signal_summary}[/dim]")
             console.print()
 
     if status_message:
@@ -737,6 +782,7 @@ def cmd_chat(args: argparse.Namespace) -> None:
     from services.api.app.chat import chat
     from services.cli.project import find_project_root, load_config
     from services.cli.remote import _chat_remote
+    from services.cli.user_config import load_user_config
     from services.core.config import get_settings
     from services.core.logging import setup_logging
     from services.core.providers import get_embedding_provider, get_llm_provider
@@ -748,6 +794,13 @@ def cmd_chat(args: argparse.Namespace) -> None:
 
     settings = get_settings()
     setup_logging("ERROR")
+    profile = load_user_config()
+    config_show_ranking = _coerce_bool(profile.get("show_ranking_signals"), default=False)
+    show_ranking_signals = (
+        config_show_ranking
+        if args.show_ranking_signals is None
+        else bool(args.show_ranking_signals)
+    )
 
     embed_provider = get_embedding_provider(settings)
     llm_provider = get_llm_provider(settings)
@@ -777,7 +830,7 @@ def cmd_chat(args: argparse.Namespace) -> None:
                         answer_style=answer_style,
                         top_k=args.top_k,
                         include_context=args.show_context,
-                        include_ranking_signals=args.show_ranking_signals,
+                        include_ranking_signals=show_ranking_signals,
                         api_key=args.api_key,
                     )
                 return chat(
@@ -789,7 +842,7 @@ def cmd_chat(args: argparse.Namespace) -> None:
                     answer_style=answer_style,
                     collection=collection_name,
                     top_k=args.top_k,
-                    include_ranking_signals=args.show_ranking_signals,
+                    include_ranking_signals=show_ranking_signals,
                     settings=settings,
                 )
 
@@ -803,7 +856,7 @@ def cmd_chat(args: argparse.Namespace) -> None:
                 answer_style=answer_style,
                 top_k=args.top_k,
                 include_context=args.show_context,
-                include_ranking_signals=args.show_ranking_signals,
+                include_ranking_signals=show_ranking_signals,
                 api_key=args.api_key,
             )
         return chat(
@@ -815,7 +868,7 @@ def cmd_chat(args: argparse.Namespace) -> None:
             answer_style=answer_style,
             collection=collection_name,
             top_k=args.top_k,
-            include_ranking_signals=args.show_ranking_signals,
+            include_ranking_signals=show_ranking_signals,
             settings=settings,
         )
 
@@ -835,7 +888,7 @@ def cmd_chat(args: argparse.Namespace) -> None:
                         "answer_style": result.answer_style,
                         "turn_index": result.turn_index,
                         "context_snippets": result.context_snippets if args.show_context else [],
-                        "show_ranking_signals": args.show_ranking_signals,
+                        "show_ranking_signals": show_ranking_signals,
                     },
                     indent=2,
                 )
@@ -868,7 +921,7 @@ def cmd_chat(args: argparse.Namespace) -> None:
             table.add_column("Source", style="cyan", min_width=15, max_width=30)
             table.add_column("Lines", justify="center", style="yellow", width=8, no_wrap=True)
             table.add_column("Score", justify="right", style="green", width=7, no_wrap=True)
-            if args.show_ranking_signals:
+            if show_ranking_signals:
                 table.add_column("Signals", style="magenta", min_width=20, max_width=40)
             for i, cite in enumerate(result.citations, 1):
                 source = cite.get("source", "unknown")
@@ -877,7 +930,7 @@ def cmd_chat(args: argparse.Namespace) -> None:
                 score = f"{cite.get('similarity', 0):.1%}"
                 signals = cite.get("ranking_signals", [])
                 signal_text = ", ".join(str(s) for s in signals) if signals else "-"
-                if args.show_ranking_signals:
+                if show_ranking_signals:
                     table.add_row(str(i), source_short, lines, score, signal_text)
                 else:
                     table.add_row(str(i), source_short, lines, score)
@@ -922,7 +975,6 @@ def cmd_chat(args: argparse.Namespace) -> None:
         sys.stdin.isatty()
         and sys.stdout.isatty()
         and not args.show_context
-        and not args.show_ranking_signals
     )
     provider_label = _format_chat_provider_label(settings, args.api_url)
     turns: list[_ChatShellTurn] = []
@@ -951,6 +1003,7 @@ def cmd_chat(args: argparse.Namespace) -> None:
                 session_id=active_session,
                 provider_label=provider_label,
                 turns=turns,
+                show_ranking_signals=show_ranking_signals,
                 status_message=status_message,
             )
             status_message = ""
@@ -2149,6 +2202,7 @@ def cmd_config_show(args: argparse.Namespace) -> None:
         f"[cyan]llm_enabled:[/cyan] {output.get('llm_enabled', '(not set)')}",
         f"[cyan]storage_backend:[/cyan] {output.get('storage_backend', '(not set)')}",
         f"[cyan]local_db_path:[/cyan] {output.get('local_db_path', '(not set)')}",
+        f"[cyan]show_ranking_signals:[/cyan] {output.get('show_ranking_signals', '(not set)')}",
         f"[cyan]updated_at:[/cyan] {output.get('updated_at', '(unknown)')}",
     ]
     console.print()
@@ -2169,6 +2223,9 @@ def cmd_config_set(args: argparse.Namespace) -> None:
         updates["local_db_path"] = args.local_db_path.strip()
     if args.llm_enabled is not None:
         updates["llm_enabled"] = args.llm_enabled == "true"
+    raw_show_ranking = getattr(args, "show_ranking_signals", None)
+    if raw_show_ranking is not None:
+        updates["show_ranking_signals"] = _coerce_bool(raw_show_ranking)
 
     if args.unset_openai_api_key:
         updates["openai_api_key"] = ""
@@ -2192,6 +2249,7 @@ def cmd_config_set(args: argparse.Namespace) -> None:
                         "llm_enabled": updates.get("llm_enabled"),
                         "storage_backend": updates.get("storage_backend"),
                         "local_db_path": updates.get("local_db_path"),
+                        "show_ranking_signals": updates.get("show_ranking_signals"),
                     },
                 },
                 indent=2,
@@ -2208,6 +2266,8 @@ def cmd_config_set(args: argparse.Namespace) -> None:
         lines.append(f"  - storage_backend: {updates['storage_backend']}")
     if "local_db_path" in updates:
         lines.append(f"  - local_db_path: {updates['local_db_path']}")
+    if "show_ranking_signals" in updates:
+        lines.append(f"  - show_ranking_signals: {updates['show_ranking_signals']}")
 
     console.print()
     console.print(Panel("\n".join(lines), title="ragops config set", border_style="green"))
@@ -2673,10 +2733,19 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Request and print raw retrieved context snippets",
     )
-    p_chat.add_argument(
+    ranking_group = p_chat.add_mutually_exclusive_group()
+    ranking_group.add_argument(
         "--show-ranking-signals",
+        dest="show_ranking_signals",
         action="store_true",
+        default=None,
         help="Show ranking debug signals for each citation source",
+    )
+    ranking_group.add_argument(
+        "--hide-ranking-signals",
+        dest="show_ranking_signals",
+        action="store_false",
+        help="Hide ranking debug signals for this command run",
     )
     p_chat.set_defaults(func=cmd_chat)
 
@@ -2845,6 +2914,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_config_set.add_argument(
         "--local-db-path",
         help="Set default local SQLite DB path in global config",
+    )
+    p_config_set.add_argument(
+        "--show-ranking-signals",
+        choices=["true", "false"],
+        help="Set default ranking signal visibility for chat output",
     )
     p_config_set.add_argument("--json", action="store_true", help="Output raw JSON")
     p_config_set.set_defaults(func=cmd_config_set)

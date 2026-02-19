@@ -2,7 +2,7 @@
 
 ## Overview
 
-RAG Ops is a CLI onboarding copilot for codebases.
+RAG Ops is a CLI codebase copilot.
 
 The core user flow is:
 1. `ragops init`
@@ -29,9 +29,9 @@ ragops chat "How should I start learning this codebase?"
 
 ## What `ragops scan` Does
 
-`ragops scan` performs one command onboarding:
+`ragops scan` performs a single command indexing workflow:
 1. Ingests project files into a collection.
-2. Generates onboarding manuals in `./.ragops/manuals` by default.
+2. Generates project manuals in `./.ragops/manuals` by default.
 3. Ingests those manuals so chat can cite them immediately.
 
 Required generated outputs:
@@ -73,6 +73,9 @@ ragops chat "Explain this code path" \
 # inspect ranking decisions for each citation
 ragops chat "why this answer?" --show-ranking-signals
 
+# override global default for one run
+ragops chat "why this answer?" --hide-ranking-signals
+
 # submit quality feedback
 ragops feedback --verdict positive --comment "helpful answer"
 
@@ -89,6 +92,7 @@ Useful config commands:
 ```bash
 ragops config show
 ragops config set --openai-api-key <key> --storage-backend sqlite --llm-enabled true
+ragops config set --show-ranking-signals true
 ragops config doctor
 ragops config doctor --fix
 ```

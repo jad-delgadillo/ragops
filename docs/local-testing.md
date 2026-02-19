@@ -17,7 +17,7 @@ make dev
 # 2. Install dependencies
 make install
 
-# 3. Onboard a repo (uses OpenAI embeddings, ~$0.10 for small repos)
+# 3. Index a repo (uses OpenAI embeddings, ~$0.10 for small repos)
 make repo-add URL=https://github.com/your-org/your-repo
 
 # 4. Start the real API server (Terminal 1)
@@ -39,13 +39,13 @@ make frontend
 
 > **Important:** `local-api` and `mock-api` share port 8090. Only run one at a time.
 
-## Onboarding a Repository
+## Indexing a Repository
 
 ```bash
 # First time
 make repo-add URL=https://github.com/org/repo
 
-# Re-onboard (overwrite existing)
+# Re-index (overwrite existing)
 make repo-add URL=https://github.com/org/repo FORCE=1
 
 # List tracked repos
@@ -55,7 +55,7 @@ make repo-list
 make repo-sync NAME=org-repo
 ```
 
-**What happens during onboarding:**
+**What happens during indexing:**
 1. Clones the repo to `.ragops/repos/<name>/`
 2. Reads and chunks all code files
 3. Sends chunks to OpenAI for embedding (~$0.10 for small repos)
@@ -106,7 +106,7 @@ lsof -ti :8090 | xargs kill -9
 make repo-add URL=... FORCE=1
 ```
 
-**Slow onboarding:**
+**Slow indexing:**
 Large repos take time because every file is embedded via OpenAI. For faster testing, use a small repo (< 50 files).
 
 **"make frontend" fails:**

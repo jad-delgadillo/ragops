@@ -1,4 +1,4 @@
-"""Tests for deterministic onboarding manual generation."""
+"""Tests for deterministic manual generation."""
 
 from __future__ import annotations
 
@@ -97,7 +97,7 @@ def test_generate_manual_pack_renders_lazy_repo_flow(tmp_path: Path) -> None:
     generator.generate(output_dir=output_dir, include_db=False)
 
     architecture_manual = (output_dir / "ARCHITECTURE_DIAGRAM.md").read_text(encoding="utf-8")
-    assert "Lazy Repo Onboarding + On-demand Retrieval" in architecture_manual
+    assert "Lazy Repo Indexing + On-demand Retrieval" in architecture_manual
     assert "ragops repo add-lazy <url>" in architecture_manual
     assert "Search {collection}_tree for relevant paths" in architecture_manual
 

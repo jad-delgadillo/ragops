@@ -1,8 +1,8 @@
 # RAG Ops
 
-RAG Ops is a CLI codebase onboarding copilot.
+RAG Ops is a CLI codebase copilot.
 
-It indexes a project, generates onboarding manuals, and answers questions with citations.
+It indexes a project, generates project manuals, and answers questions with citations.
 
 ## MVP in One Flow
 
@@ -52,7 +52,7 @@ Detailed contract: `docs/scan-output-spec.md`.
 ## MVP Scope
 
 In scope:
-- Local-first CLI onboarding (`init`, `scan`, `chat`)
+- Local-first CLI workflow (`init`, `scan`, `chat`)
 - Citation-grounded answers with session continuity
 - Deterministic manual generation during scan
 - Feedback and eval commands for quality tracking
@@ -72,6 +72,7 @@ ragops scan --collection <name>
 ragops chat
 ragops chat "question" --mode explain_like_junior --answer-style concise
 ragops chat "question" --show-ranking-signals
+ragops chat "question" --hide-ranking-signals
 ragops feedback --verdict positive --comment "helpful answer"
 ragops eval --dataset ./eval/cases.yaml
 ```
@@ -81,12 +82,13 @@ Global profile helpers:
 ```bash
 ragops config show
 ragops config set --openai-api-key <key> --storage-backend sqlite --llm-enabled true
+ragops config set --show-ranking-signals true
 ragops config doctor
 ```
 
 ## Optional Repo Workflow
 
-For GitHub repo onboarding flows:
+For GitHub repo indexing flows:
 
 ```bash
 ragops repo add https://github.com/<org>/<repo> --ref main --generate-manuals

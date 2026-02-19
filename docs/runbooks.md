@@ -32,7 +32,7 @@ make ingest DIR=./docs
 make query Q="How does the ingestion work?"
 ```
 
-### Chat (multi-turn onboarding)
+### Chat (multi-turn codebase Q and A)
 ```bash
 .venv/bin/python -m services.cli.main chat "How should I learn this codebase?" --mode explain_like_junior
 # Continue same thread:
@@ -49,7 +49,7 @@ make query Q="How does the ingestion work?"
 .venv/bin/python -m services.cli.main eval --dataset ./eval/cases.yaml
 ```
 
-### Frontend onboarding chat
+### Frontend chat
 ```bash
 make mock-api
 make frontend
@@ -57,14 +57,14 @@ make frontend
 Open `http://127.0.0.1:4173`.
 Detailed guide: `docs/frontend-chat-manual.md`
 
-### Generate onboarding manuals
+### Generate project manuals
 ```bash
 .venv/bin/python -m services.cli.main generate-manuals --output ./manuals
 # Optional: ingest generated manuals
 .venv/bin/python -m services.cli.main generate-manuals --output ./manuals --ingest
 ```
 
-### GitHub repo onboarding
+### GitHub repo indexing
 ```bash
 # Register + index GitHub repo
 .venv/bin/python -m services.cli.main repo add https://github.com/<org>/<repo> --ref main --generate-manuals
@@ -134,9 +134,9 @@ curl -X POST ${API_URL}/v1/query \
   -d '{"question": "How do I deploy?", "collection": "default"}'
 ```
 
-### Async repo onboarding API
+### Async repo indexing API
 ```bash
-# Start onboarding job
+# Start indexing job
 curl -sS -X POST ${API_URL}/v1/repos/onboard \
   -H "Content-Type: application/json" \
   -H "X-API-Key: ${API_KEY}" \

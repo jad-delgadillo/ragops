@@ -10,7 +10,15 @@ def test_chat_parser_allows_interactive_mode_without_question() -> None:
     args = parser.parse_args(["chat"])
     assert args.command == "chat"
     assert args.question is None
-    assert args.show_ranking_signals is False
+    assert args.show_ranking_signals is None
+
+
+def test_chat_parser_ranking_signal_overrides() -> None:
+    parser = build_parser()
+    show_args = parser.parse_args(["chat", "--show-ranking-signals"])
+    hide_args = parser.parse_args(["chat", "--hide-ranking-signals"])
+    assert show_args.show_ranking_signals is True
+    assert hide_args.show_ranking_signals is False
 
 
 def test_scan_parser_defaults() -> None:
@@ -54,6 +62,8 @@ def test_config_set_parser_values() -> None:
             ".ragops/my.db",
             "--llm-enabled",
             "true",
+            "--show-ranking-signals",
+            "true",
         ]
     )
     assert args.command == "config"
@@ -62,6 +72,7 @@ def test_config_set_parser_values() -> None:
     assert args.storage_backend == "sqlite"
     assert args.local_db_path == ".ragops/my.db"
     assert args.llm_enabled == "true"
+    assert args.show_ranking_signals == "true"
 
 
 def test_config_doctor_parser_defaults() -> None:

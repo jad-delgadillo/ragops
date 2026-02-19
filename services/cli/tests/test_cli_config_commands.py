@@ -18,6 +18,7 @@ def test_cmd_config_set_and_show_json(tmp_path: Path, monkeypatch, capsys) -> No
         llm_enabled="true",
         storage_backend="sqlite",
         local_db_path=".ragops/ragops.db",
+        show_ranking_signals="true",
         json=True,
     )
     cmd_config_set(set_args)
@@ -33,6 +34,7 @@ def test_cmd_config_set_and_show_json(tmp_path: Path, monkeypatch, capsys) -> No
     assert config["openai_api_key"].startswith("sk-")
     assert "..." in config["openai_api_key"]
     assert config["storage_backend"] == "sqlite"
+    assert config["show_ranking_signals"] is True
 
 
 def test_cmd_config_show_empty_json(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -99,6 +101,7 @@ def test_cmd_config_doctor_fix_writes_missing_project_env(
         llm_enabled="true",
         storage_backend="sqlite",
         local_db_path=".ragops/global.db",
+        show_ranking_signals="false",
         json=True,
     )
     cmd_config_set(set_args)

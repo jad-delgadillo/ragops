@@ -1,4 +1,4 @@
-# MVP Definition: CLI Codebase Onboarding Copilot
+# MVP Definition: CLI Codebase Copilot
 
 ## Product Statement
 
@@ -28,7 +28,7 @@ In scope:
 - Repeatable quality checks (`ragops eval`)
 
 Also in scope but secondary:
-- GitHub repo onboarding (`ragops repo add`, `/v1/repos/onboard`)
+- GitHub repo indexing (`ragops repo add`, `/v1/repos/onboard`)
 - Optional frontend demo flow
 
 ## Non-Goals for This MVP
@@ -43,7 +43,7 @@ Also in scope but secondary:
 
 `ragops scan` must:
 1. Ingest project code into the selected collection.
-2. Generate onboarding manuals.
+2. Generate project manuals.
 3. Ingest those manuals so chat can use them immediately.
 
 Required manual set includes:
@@ -103,4 +103,4 @@ Recommended initial targets:
 ## Positioning
 
 Use this phrasing consistently:
-"RAG Ops is a CLI onboarding copilot that indexes any codebase and answers questions with citations."
+"RAG Ops is a CLI codebase copilot that indexes any codebase and answers questions with citations."

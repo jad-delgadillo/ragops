@@ -1,4 +1,4 @@
-"""Deterministic onboarding manual generation for codebase, API, and database."""
+"""Deterministic manual generation for codebase, API, and database."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ class ManualPackResult:
 
 
 class ManualPackGenerator:
-    """Generates onboarding manuals from project structure and runtime metadata."""
+    """Generates manuals from project structure and runtime metadata."""
 
     def __init__(self, root_dir: Path):
         self.root_dir = root_dir.resolve()
@@ -154,7 +154,7 @@ class ManualPackGenerator:
             },
             {
                 "command": "ragops generate-manuals",
-                "summary": "Generate deterministic onboarding manuals",
+                "summary": "Generate deterministic project manuals",
             },
             {"command": "ragops feedback", "summary": "Store answer quality feedback"},
             {"command": "ragops eval", "summary": "Run dataset-driven quality evaluation"},
@@ -388,7 +388,7 @@ class ManualPackGenerator:
 Generated at: {generated_at}
 
 ## Summary
-{self._claim("This project exposes a CLI-first onboarding workflow (`ragops init`, `ragops scan`, `ragops chat`).", source=self._source_pointer("services/cli/main.py", contains='sub.add_parser("scan"'))}
+{self._claim("This project exposes a CLI-first workflow (`ragops init`, `ragops scan`, `ragops chat`).", source=self._source_pointer("services/cli/main.py", contains='sub.add_parser("scan"'))}
 {self._claim("Scan generates deterministic manuals and can ingest them for retrieval.", source=self._source_pointer("services/cli/main.py", contains="ManualPackGenerator"))}
 
 ## What This Repo Does
@@ -454,7 +454,7 @@ Generated at: {generated_at}
 
         boundaries = [
             self._claim(
-                "Collection boundaries separate code and manual corpora during repo onboarding.",
+                "Collection boundaries separate code and manual corpora during repo indexing.",
                 source=self._source_pointer("services/cli/main.py", contains="resolve_collection_pair"),
                 confidence="medium",
             ),
@@ -473,7 +473,7 @@ Generated at: {generated_at}
 
 ## Data Flow
 1. `scan` ingests repository files into vector storage.
-2. Manual pack generation adds high-level onboarding context.
+2. Manual pack generation adds high-level project context.
 3. `chat` embeds the question, retrieves ranked chunks, and returns citations.
 
 ## Boundaries and Dependencies
@@ -608,7 +608,7 @@ Generated at: {generated_at}
 ## Key Symbols
 {symbols}
 
-## Onboarding Notes
+## Reading Notes
 1. Start with `services/cli/main.py`.
 2. Review `services/ingest/app/pipeline.py`.
 3. Review `services/api/app/chat.py` and `services/api/app/retriever.py`.
@@ -677,7 +677,7 @@ Generated at: {generated_at}
         generated_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%SZ")
         file_set = set(ctx.file_tree)
 
-        has_lazy_onboarding = "services/api/app/repo_onboarding.py" in file_set
+        has_lazy_repo_indexing = "services/api/app/repo_onboarding.py" in file_set
         has_lazy_retrieval = "services/api/app/retriever.py" in file_set
         has_github_tree = "services/core/github_tree.py" in file_set
         has_database = (
@@ -707,10 +707,10 @@ Generated at: {generated_at}
                 return f"    note over U: {title}"
             return f"    note over U,{rightmost}: {title}"
 
-        if has_lazy_onboarding and has_lazy_retrieval and has_github_tree:
+        if has_lazy_repo_indexing and has_lazy_retrieval and has_github_tree:
             phase_one_lines = [
                 "    rect rgb(55, 55, 55)",
-                _note("Phase 1: Instant Onboarding"),
+                _note("Phase 1: Instant Repo Indexing"),
                 "    U->>C: ragops repo add-lazy <url>",
                 "    C->>G: Fetch file tree (1 API call)",
                 "    G-->>C: File paths + metadata",
@@ -761,7 +761,7 @@ Generated at: {generated_at}
                     "    end",
                 ]
             )
-            flow_name = "Lazy Repo Onboarding + On-demand Retrieval"
+            flow_name = "Lazy Repo Indexing + On-demand Retrieval"
         else:
             phase_one_lines = [
                 "    rect rgb(55, 55, 55)",
@@ -842,7 +842,7 @@ Generated at: {generated_at}
 
 ## Notes
 1. This diagram is generated deterministically from detected project modules.
-2. It is intended for onboarding and architecture communication.
+2. It is intended for codebase understanding and architecture communication.
 3. Render in GitHub/Markdown viewer with Mermaid support.
 """
 

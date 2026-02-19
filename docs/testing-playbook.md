@@ -48,7 +48,7 @@ cd /Users/jorgedelgadillo/Developer/ragops
 Goal: test retrieval/chat behavior for `ragops` itself while minimizing file changes.
 
 ### Mode B: Product usage testing (external GitHub repos)
-Goal: validate repo onboarding workflows (`repo add/sync`) as an end-user flow.
+Goal: validate repo indexing workflows (`repo add/sync`) as an end-user flow.
 
 Keep these modes separate.
 
@@ -130,7 +130,7 @@ Ask questions:
 .venv/bin/python -m services.cli.main chat "What is the architecture?" --collection <org-repo>_code
 
 # manuals-focused
-.venv/bin/python -m services.cli.main chat "Summarize onboarding docs" --collection <org-repo>_manuals
+.venv/bin/python -m services.cli.main chat "Summarize project docs" --collection <org-repo>_manuals
 ```
 
 ## 5. Lambda Testing Workflow

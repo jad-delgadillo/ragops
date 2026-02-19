@@ -2,7 +2,7 @@
 
 ## Objective
 
-Ship the MVP defined in `docs/mvp.md`: a CLI codebase onboarding copilot centered on:
+Ship the MVP defined in `docs/mvp.md`: a CLI codebase copilot centered on:
 1. `ragops init`
 2. `ragops scan`
 3. `ragops chat`
@@ -12,7 +12,7 @@ The output must be citation-grounded, session-aware, and measurable via KPI snap
 ## Scope Lock
 
 In scope:
-- Local-first CLI onboarding workflow (`init`, `scan`, `chat`)
+- Local-first CLI workflow (`init`, `scan`, `chat`)
 - Scan manual generation and ingest
 - Citation-grounded chat with session continuity
 - Feedback capture (`ragops feedback` / `/v1/feedback`)
@@ -114,22 +114,22 @@ ragops chat "How should I start learning this codebase?"
 ### Task 2.2: Quality guardrails
 - [ ] Add/adjust tests to prevent raw code-dump behavior when explanatory mode is requested.
 - [ ] Validate `mode` and `answer_style` handling for valid/invalid values.
-- [ ] Confirm answerable onboarding prompts return at least one citation.
+- [ ] Confirm answerable broad prompts return at least one citation.
 
 ### Phase 2 Exit Criteria
 - [ ] Session continuity is verified.
 - [ ] Citation presence is stable on answerable prompts.
-- [ ] Answer style remains onboarding-focused and grounded.
+- [ ] Answer style remains project-focused and grounded.
 
 ## Phase 3: Feedback, Eval, and KPI Evidence
 
 ### Task 3.1: Eval dataset quality
-- [ ] Expand onboarding-focused eval cases:
+- [ ] Expand project-focused eval cases:
   - architecture discovery
   - first files to read
   - run/test flow
   - API behavior
-  - repo onboarding behavior
+  - repo indexing behavior
 
 ### Task 3.2: Generate reports
 - [ ] Run eval and publish:
@@ -153,13 +153,13 @@ ragops chat "How should I start learning this codebase?"
 
 ## Phase 4: Secondary Surfaces (Repo and Frontend)
 
-### Task 4.1: Repo onboarding validation
+### Task 4.1: Repo indexing validation
 - [ ] Validate `ragops repo add` and `ragops repo sync` against a public repo.
 - [ ] Confirm code/manual collection behavior and citations.
 - [ ] Validate async `/v1/repos/onboard` status polling flow.
 
 ### Task 4.2: Frontend hardening (optional for MVP demo)
-- [ ] Validate onboarding + chat + feedback loop in browser flow.
+- [ ] Validate repo indexing + chat + feedback loop in browser flow.
 - [ ] Improve error/loading states where needed.
 
 ### Phase 4 Exit Criteria
@@ -210,5 +210,5 @@ ragops chat "How should I start learning this codebase?"
 1. `feat(cli): harden init-scan-chat golden path reliability`
 2. `feat(scan): improve manual generation quality and scan diagnostics`
 3. `feat(chat): tighten citation guarantees and session continuity`
-4. `test(eval): expand onboarding dataset and publish reports`
+4. `test(eval): expand codebase-understanding dataset and publish reports`
 5. `docs(mvp): align roadmap, execution plan, and KPI evidence`

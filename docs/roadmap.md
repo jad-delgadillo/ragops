@@ -2,7 +2,7 @@
 
 ## Roadmap Goal
 
-Ship a reliable CLI onboarding copilot first, then improve scan intelligence and answer trustworthiness in phases.
+Ship a reliable CLI codebase copilot first, then improve scan intelligence and answer trustworthiness in phases.
 
 ## Phase 0: MVP (Now)
 
@@ -17,7 +17,7 @@ Deliverables:
 
 Exit criteria:
 - New user can reach first grounded answer in under 10 minutes.
-- Citation coverage is consistently strong on onboarding prompts.
+- Citation coverage is consistently strong on broad prompts.
 
 ## Phase 1: Scan Fidelity
 
@@ -33,13 +33,13 @@ Planned features:
 6. Add ownership and hot-path change impact hints.
 
 Exit criteria:
-- Generated docs explain run/test/onboarding flow without manual edits for common repos.
+- Generated docs explain run/test/repository flow without manual edits for common repos.
 - Reduced low-confidence sections per scan.
 
 ## Phase 2: Chat Trust and Guidance
 
 Goal:
-- Improve answer quality and user trust for onboarding questions.
+- Improve answer quality and user trust for codebase questions.
 
 Planned features:
 1. Retrieval weighting that prefers manuals first, code second.
@@ -49,22 +49,22 @@ Planned features:
 5. Follow-up suggestions: next files, next commands, next questions.
 
 Exit criteria:
-- Higher eval source-hit and answer-hit rates on onboarding datasets.
+- Higher eval source-hit and answer-hit rates on project datasets.
 - Measurable reduction in ungrounded or low-confidence answers.
 
 ## Phase 3: Team Workflow
 
 Goal:
-- Move from single-user local value to repeatable team onboarding workflows.
+- Move from single-user local value to repeatable team workflows.
 
 Planned features:
 1. Shared scan profiles and org-level conventions.
 2. Repo portfolio mode (chat across multiple projects).
-3. Persistent onboarding sessions and handoff summaries.
+3. Persistent sessions and handoff summaries.
 4. Better change-awareness (what changed since last scan).
 
 Exit criteria:
-- Teams can reuse scan outputs and onboarding playbooks across repos with low setup overhead.
+- Teams can reuse scan outputs and project playbooks across repos with low setup overhead.
 
 ## Prioritization Rules
 

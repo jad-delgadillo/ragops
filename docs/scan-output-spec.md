@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Define exactly what `ragops scan` should produce so onboarding quality is consistent across projects.
+Define exactly what `ragops scan` should produce so codebase understanding quality is consistent across projects.
 
 ## Current `scan` Behavior
 
@@ -22,7 +22,7 @@ Current flow:
 Every successful scan must generate these files:
 
 1. `CODEBASE_MANUAL.md`
-Purpose: project map, key modules, onboarding reading order.
+Purpose: project map, key modules, recommended reading order.
 
 2. `PROJECT_OVERVIEW.md`
 Purpose: quick orientation, run flow, and key entrypoints.
@@ -56,11 +56,11 @@ All manuals should follow these rules:
 2. Prefer deterministic extraction from source files over speculative prose.
 3. Include source pointers whenever claims depend on code facts.
 4. Separate facts from inference. If inference is needed, label confidence as `high`, `medium`, or `low`.
-5. Keep docs onboarding-focused: architecture, entrypoints, run/test flow, and operational gotchas.
+5. Keep docs project-focused: architecture, entrypoints, run/test flow, and operational gotchas.
 
 ## What to Add Next
 
-For stronger onboarding outcomes, future scan iterations should enrich `SCAN_INDEX.json` with:
+For stronger codebase understanding outcomes, future scan iterations should enrich `SCAN_INDEX.json` with:
 
 1. Ownership confidence drift signals.
 2. Changed-file impact summaries.
