@@ -2478,6 +2478,70 @@ def cmd_config_doctor(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# migrate-embedding-dimension
+# ---------------------------------------------------------------------------
+
+
+def cmd_migrate_embedding_dimension(args: argparse.Namespace) -> None:
+    """Migrate stored embedding dimension and clear stale vectors/documents."""
+    from services.core.config import get_settings
+    from services.core.logging import setup_logging
+    from services.core.storage import (
+        get_connection,
+        migrate_embedding_dimension,
+        resolve_storage_backend,
+    )
+
+    settings = get_settings()
+    backend = resolve_storage_backend(settings)
+    setup_logging("ERROR")
+
+    if args.dimension <= 0:
+        console.print("[red]Error:[/red] --dimension must be > 0")
+        sys.exit(1)
+
+    warning = (
+        f"This will delete indexed documents/chunks and migrate embedding dimension "
+        f"to {args.dimension} on backend '{backend}'."
+    )
+    if not args.yes:
+        if sys.stdin.isatty():
+            console.print(f"[yellow]{warning}[/yellow]")
+            answer = input("Continue? [y/N]: ").strip().lower()
+            if answer not in {"y", "yes"}:
+                console.print("[yellow]Canceled.[/yellow]")
+                return
+        else:
+            console.print("[red]Error:[/red] Non-interactive mode requires --yes")
+            sys.exit(1)
+
+    conn = get_connection(settings)
+    try:
+        result = migrate_embedding_dimension(conn, new_dimension=args.dimension)
+    finally:
+        conn.close()
+
+    status = "changed" if result.get("changed") else "unchanged"
+    lines = [
+        f"[cyan]Backend:[/cyan] {result.get('backend', backend)}",
+        f"[cyan]Status:[/cyan] {status}",
+        f"[cyan]Previous dimension:[/cyan] {result.get('previous_dimension', 'unknown')}",
+        f"[cyan]New dimension:[/cyan] {result.get('new_dimension', args.dimension)}",
+        f"[cyan]Documents deleted:[/cyan] {result.get('documents_deleted', 0)}",
+        f"[cyan]Chunks deleted:[/cyan] {result.get('chunks_deleted', 0)}",
+    ]
+    console.print()
+    console.print(
+        Panel(
+            "\n".join(lines),
+            title="🧰 ragops migrate-embedding-dimension",
+            border_style="green",
+        )
+    )
+    console.print()
+
+
+# ---------------------------------------------------------------------------
 # providers
 # ---------------------------------------------------------------------------
 
@@ -2975,6 +3039,24 @@ def build_parser() -> argparse.ArgumentParser:
     # --- providers ---
     p_providers = sub.add_parser("providers", help="Show available LLM/Embedding providers")
     p_providers.set_defaults(func=cmd_providers)
+
+    # --- migrate-embedding-dimension ---
+    p_migrate_embedding = sub.add_parser(
+        "migrate-embedding-dimension",
+        help="Migrate embedding dimension and clear stale indexed vectors",
+    )
+    p_migrate_embedding.add_argument(
+        "--dimension",
+        type=int,
+        required=True,
+        help="Target embedding dimension (e.g. 384, 768, 1536)",
+    )
+    p_migrate_embedding.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm destructive migration without prompt",
+    )
+    p_migrate_embedding.set_defaults(func=cmd_migrate_embedding_dimension)
 
     # --- repo ---
     p_repo = sub.add_parser("repo", help="Manage GitHub repositories for indexing and chat")

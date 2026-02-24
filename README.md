@@ -113,6 +113,12 @@ ragops config set --show-ranking-signals true
 ragops config doctor
 ```
 
+Embedding model migration helper (dimension changes are destructive by design):
+
+```bash
+ragops migrate-embedding-dimension --dimension 768 --yes
+```
+
 ## Optional Repo Workflow
 
 For GitHub repo indexing flows:

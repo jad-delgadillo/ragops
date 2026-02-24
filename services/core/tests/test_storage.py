@@ -16,6 +16,7 @@ from services.core.storage import (
     insert_chat_message,
     insert_feedback,
     list_chat_messages,
+    migrate_embedding_dimension,
     resolve_storage_backend,
     search_vectors,
     upsert_chat_session,
@@ -207,3 +208,46 @@ def test_document_exists_for_index_requires_matching_version(tmp_path: Path) -> 
 
     assert same == doc_id
     assert other is None
+
+
+def test_sqlite_migrate_embedding_dimension_clears_vectors(tmp_path: Path) -> None:
+    settings = _sqlite_settings(tmp_path / "ragops.db")
+    conn = get_connection(settings)
+    try:
+        validate_embedding_dimension(conn, 3)
+        doc_id = upsert_document(
+            conn,
+            s3_key="README.md",
+            sha256="sha-readme",
+            collection="demo",
+            metadata={"filename": "README.md"},
+        )
+        upsert_chunks(
+            conn,
+            doc_id,
+            [
+                {
+                    "chunk_index": 0,
+                    "content": "RAG Ops overview",
+                    "embedding": [1.0, 0.0, 0.0],
+                    "token_count": 3,
+                    "source_file": "README.md",
+                    "line_start": 1,
+                    "line_end": 5,
+                },
+            ],
+        )
+        result = migrate_embedding_dimension(conn, new_dimension=4)
+        validate_embedding_dimension(conn, 4)
+        docs_after = conn.execute("SELECT COUNT(*) AS c FROM documents").fetchone()["c"]
+        chunks_after = conn.execute("SELECT COUNT(*) AS c FROM chunks").fetchone()["c"]
+    finally:
+        conn.close()
+
+    assert result["changed"] is True
+    assert result["previous_dimension"] == 3
+    assert result["new_dimension"] == 4
+    assert int(result["documents_deleted"]) == 1
+    assert int(result["chunks_deleted"]) == 1
+    assert int(docs_after) == 0
+    assert int(chunks_after) == 0

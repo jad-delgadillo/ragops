@@ -12,6 +12,7 @@ from typing import Any
 
 import psycopg
 from pgvector.psycopg import register_vector
+from psycopg import sql
 from psycopg.rows import dict_row
 
 from services.core.config import Settings, get_settings
@@ -117,6 +118,66 @@ def validate_embedding_dimension(conn: psycopg.Connection, provider_dimension: i
             f"database expects {schema_dimension}, provider returns {provider_dimension}. "
             "Use a compatible embedding provider or migrate the schema."
         )
+
+
+def migrate_embedding_dimension(
+    conn: psycopg.Connection,
+    *,
+    new_dimension: int,
+) -> dict[str, Any]:
+    """Migrate chunks.embedding dimension and clear stale vectors/documents.
+
+    This operation is destructive by design because vector dimensionality changes
+    invalidate existing embeddings.
+    """
+    if int(new_dimension) <= 0:
+        raise ValueError("new_dimension must be a positive integer")
+
+    current_dimension = get_chunks_embedding_dimension(conn)
+    if current_dimension == int(new_dimension):
+        return {
+            "backend": "postgres",
+            "previous_dimension": current_dimension,
+            "new_dimension": int(new_dimension),
+            "documents_deleted": 0,
+            "chunks_deleted": 0,
+            "changed": False,
+        }
+
+    count_row = conn.execute(
+        """
+        SELECT
+            (SELECT COUNT(*) FROM documents) AS documents_deleted,
+            (SELECT COUNT(*) FROM chunks) AS chunks_deleted
+        """
+    ).fetchone()
+    docs_deleted = int(count_row["documents_deleted"]) if count_row else 0
+    chunks_deleted = int(count_row["chunks_deleted"]) if count_row else 0
+
+    # Purge stale embeddings/documents first, then alter vector column type.
+    conn.execute("DELETE FROM documents")
+    conn.execute("DROP INDEX IF EXISTS idx_chunks_embedding")
+    conn.execute(
+        sql.SQL("ALTER TABLE chunks ALTER COLUMN embedding TYPE vector({})").format(
+            sql.SQL(str(int(new_dimension)))
+        )
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_chunks_embedding
+            ON chunks USING ivfflat (embedding vector_cosine_ops)
+            WITH (lists = 100)
+        """
+    )
+    conn.commit()
+    return {
+        "backend": "postgres",
+        "previous_dimension": current_dimension,
+        "new_dimension": int(new_dimension),
+        "documents_deleted": docs_deleted,
+        "chunks_deleted": chunks_deleted,
+        "changed": True,
+    }
 
 
 # ---------------------------------------------------------------------------

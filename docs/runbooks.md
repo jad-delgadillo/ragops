@@ -19,6 +19,13 @@ make docker-chat
 make docker-chat-shell
 ```
 
+### Embedding dimension migration (destructive reset)
+Use this when switching embedding models with different vector dimensions.
+
+```bash
+ragops migrate-embedding-dimension --dimension 768 --yes
+```
+
 ### Start the stack
 ```bash
 make dev          # starts Postgres + pgvector

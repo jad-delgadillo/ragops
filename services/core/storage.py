@@ -260,6 +260,60 @@ def validate_embedding_dimension(conn: Any, provider_dimension: int) -> None:
         )
 
 
+def migrate_embedding_dimension(
+    conn: Any,
+    *,
+    new_dimension: int,
+) -> dict[str, Any]:
+    """Migrate embedding dimension for active backend and clear stale vectors."""
+    if int(new_dimension) <= 0:
+        raise ValueError("new_dimension must be a positive integer")
+
+    if not _is_sqlite(conn):
+        return pgdb.migrate_embedding_dimension(conn, new_dimension=int(new_dimension))
+
+    previous_dimension = get_chunks_embedding_dimension(conn)
+    if previous_dimension == int(new_dimension):
+        return {
+            "backend": "sqlite",
+            "previous_dimension": previous_dimension,
+            "new_dimension": int(new_dimension),
+            "documents_deleted": 0,
+            "chunks_deleted": 0,
+            "changed": False,
+        }
+
+    row = conn.execute(
+        """
+        SELECT
+            (SELECT COUNT(*) FROM documents) AS documents_deleted,
+            (SELECT COUNT(*) FROM chunks) AS chunks_deleted
+        """
+    ).fetchone()
+    docs_deleted = int(row["documents_deleted"]) if row else 0
+    chunks_deleted = int(row["chunks_deleted"]) if row else 0
+
+    # Delete stale vectors/documents and update configured dimension.
+    conn.execute("DELETE FROM documents")
+    conn.execute(
+        """
+        INSERT INTO ragops_meta (key, value)
+        VALUES ('embedding_dimension', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """,
+        (str(int(new_dimension)),),
+    )
+    conn.commit()
+    return {
+        "backend": "sqlite",
+        "previous_dimension": previous_dimension,
+        "new_dimension": int(new_dimension),
+        "documents_deleted": docs_deleted,
+        "chunks_deleted": chunks_deleted,
+        "changed": True,
+    }
+
+
 def compute_sha256(content: str) -> str:
     """Compute SHA256 hash of text content."""
     return pgdb.compute_sha256(content)
