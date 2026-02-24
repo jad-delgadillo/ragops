@@ -16,6 +16,8 @@ Current flow:
 1. Ingest project files into the active collection.
 2. Generate manuals under `./.ragops/manuals` (default).
 3. Ingest generated manuals into the same collection.
+4. Persist collection index metadata (`repo_commit`, embedding provider/model, chunking config, `index_version`).
+5. Skip unchanged files only when both SHA and `index_version` match (prevents stale embeddings after config/model changes).
 
 ## Required Manual Outputs
 
@@ -73,6 +75,15 @@ For stronger codebase understanding outcomes, future scan iterations should enri
 - detected stack and entrypoints
 - confidence markers
 - source references used per section
+
+`ragops scan --json` now also includes `index_metadata`:
+- `repo_commit`
+- `embedding_provider`
+- `embedding_model`
+- `chunk_size`
+- `chunk_overlap`
+- `index_version`
+- `created_at`
 
 ## Suggested Section Template for Each Manual
 

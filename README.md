@@ -30,6 +30,33 @@ Single-turn usage also works:
 ragops chat "How should I start learning this codebase?"
 ```
 
+## Quickstart (Docker CLI)
+
+```bash
+docker build -t ragops .
+
+# Scan current project (path positional supported)
+docker run --rm -it \
+  -v "$PWD:/workspace" \
+  -w /workspace \
+  --env-file .env \
+  ragops scan .
+
+# One-shot chat in the same mounted project
+docker run --rm \
+  -v "$PWD:/workspace" \
+  -w /workspace \
+  --env-file .env \
+  ragops chat "How should I start learning this codebase?"
+
+# Interactive chat shell
+docker run --rm -it \
+  -v "$PWD:/workspace" \
+  -w /workspace \
+  --env-file .env \
+  ragops chat
+```
+
 ## What `scan` Produces
 
 `ragops scan` indexes the repository and writes manuals to `./.ragops/manuals` by default.
@@ -84,6 +111,12 @@ ragops config show
 ragops config set --openai-api-key <key> --storage-backend sqlite --llm-enabled true
 ragops config set --show-ranking-signals true
 ragops config doctor
+```
+
+Embedding model migration helper (dimension changes are destructive by design):
+
+```bash
+ragops migrate-embedding-dimension --dimension 768 --yes
 ```
 
 ## Optional Repo Workflow

@@ -11,6 +11,21 @@ ragops scan
 ragops chat
 ```
 
+### Docker CLI workflow
+```bash
+make docker-build
+make docker-scan
+make docker-chat
+make docker-chat-shell
+```
+
+### Embedding dimension migration (destructive reset)
+Use this when switching embedding models with different vector dimensions.
+
+```bash
+ragops migrate-embedding-dimension --dimension 768 --yes
+```
+
 ### Start the stack
 ```bash
 make dev          # starts Postgres + pgvector
@@ -63,6 +78,15 @@ Detailed guide: `docs/frontend-chat-manual.md`
 # Optional: ingest generated manuals
 .venv/bin/python -m services.cli.main generate-manuals --output ./manuals --ingest
 ```
+
+### PR summary automation (GitHub Actions)
+`/.github/workflows/pr-summary.yml` posts an auto-updated PR comment with changed-file summary,
+top areas, and a heuristic confidence score.
+
+Behavior:
+1. Attempts `ragops scan --incremental --base-ref <base_sha> --json` when `OPENAI_API_KEY` secret exists.
+2. Falls back to deterministic git-diff summary when scan metadata is unavailable.
+3. Upserts a single bot comment marked with `<!-- ragops-pr-summary -->`.
 
 ### GitHub repo indexing
 ```bash

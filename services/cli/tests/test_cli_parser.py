@@ -25,10 +25,26 @@ def test_scan_parser_defaults() -> None:
     parser = build_parser()
     args = parser.parse_args(["scan"])
     assert args.command == "scan"
+    assert args.path == "."
     assert args.output == "./.ragops/manuals"
     assert args.skip_manuals is False
     assert args.incremental is False
     assert args.base_ref == "HEAD"
+
+
+def test_scan_parser_accepts_positional_path() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["scan", "."])
+    assert args.command == "scan"
+    assert args.path == "."
+
+
+def test_migrate_embedding_dimension_parser() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["migrate-embedding-dimension", "--dimension", "768", "--yes"])
+    assert args.command == "migrate-embedding-dimension"
+    assert args.dimension == 768
+    assert args.yes is True
 
 
 def test_init_parser_defaults_to_sqlite_local_backend() -> None:

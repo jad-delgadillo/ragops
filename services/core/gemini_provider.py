@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 class GeminiEmbeddingProvider(EmbeddingProvider):
     """Google Gemini text embedding provider."""
 
+    PROVIDER = "gemini"
     MODEL = "text-embedding-004"
     DIMENSION = 768
 
@@ -49,6 +50,7 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
 class GeminiLLMProvider(LLMProvider):
     """Google Gemini LLM provider."""
 
+    PROVIDER = "gemini"
     MODEL = "gemini-2.0-flash"
 
     def __init__(self, api_key: str, model: str | None = None):

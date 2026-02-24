@@ -4,7 +4,7 @@ import pytest
 
 from services.core.bedrock_provider import BedrockEmbeddingProvider, BedrockLLMProvider
 from services.core.config import Settings
-from services.core.providers import EmbeddingProvider, LLMProvider
+from services.core.providers import EmbeddingProvider, LLMProvider, get_embedding_provider
 
 
 class TestProviderInterfaces:
@@ -17,6 +17,37 @@ class TestProviderInterfaces:
     def test_llm_provider_is_abstract(self):
         with pytest.raises(TypeError):
             LLMProvider()  # type: ignore
+
+    def test_provider_identity_metadata_from_class_attributes(self):
+        class DummyEmbedding(EmbeddingProvider):
+            PROVIDER = "dummy"
+            MODEL = "embed-1"
+
+            @property
+            def dimension(self) -> int:
+                return 3
+
+            def embed(self, texts: list[str]) -> list[list[float]]:
+                return [[0.0, 0.0, 0.0] for _ in texts]
+
+        provider = DummyEmbedding()
+        assert provider.provider_id == "dummy"
+        assert provider.model_id == "embed-1"
+
+    def test_provider_identity_metadata_falls_back_to_class_name(self):
+        class LocalLLM(LLMProvider):
+            def generate(
+                self,
+                prompt: str,
+                *,
+                max_tokens: int = 1024,
+                temperature: float = 0.1,
+            ) -> str:
+                return "ok"
+
+        provider = LocalLLM()
+        assert provider.provider_id == "local"
+        assert provider.model_id == ""
 
 
 class TestBedrockProviderStubs:
@@ -54,6 +85,7 @@ class TestSettings:
         assert s.chat_history_turns == 6
         assert s.api_auth_enabled is False
         assert s.api_keys_json == "{}"
+        assert s.huggingface_embedding_dimension == 384
 
     def test_override(self):
         s = Settings(
@@ -64,3 +96,29 @@ class TestSettings:
         )
         assert s.db_host == "custom-host"
         assert s.top_k == 10
+
+
+class TestEmbeddingProviderFactory:
+    def test_huggingface_provider_selected(self):
+        s = Settings(
+            _env_file=None,
+            EMBEDDING_PROVIDER="huggingface",
+            HUGGINGFACE_API_KEY="hf_test",
+            HUGGINGFACE_EMBEDDING_MODEL="sentence-transformers/all-MiniLM-L6-v2",
+            HUGGINGFACE_EMBEDDING_DIMENSION=384,
+            OPENAI_API_KEY="unused",
+        )
+        provider = get_embedding_provider(s)
+        assert provider.provider_id == "huggingface"
+        assert provider.model_id == "sentence-transformers/all-MiniLM-L6-v2"
+        assert provider.dimension == 384
+
+    def test_huggingface_provider_requires_key(self):
+        s = Settings(
+            _env_file=None,
+            EMBEDDING_PROVIDER="huggingface",
+            HUGGINGFACE_API_KEY="",
+            OPENAI_API_KEY="unused",
+        )
+        with pytest.raises(ValueError, match="HUGGINGFACE_API_KEY"):
+            get_embedding_provider(s)

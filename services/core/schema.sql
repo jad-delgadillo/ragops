@@ -5,6 +5,15 @@
 CREATE EXTENSION IF NOT EXISTS vector;
 
 -- ----------------------------------------------------------------
+-- Metadata table — index/runtime metadata and version stamps
+-- ----------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ragops_meta (
+    key             TEXT PRIMARY KEY,
+    value           TEXT NOT NULL,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ----------------------------------------------------------------
 -- Documents table — tracks ingested source files
 -- ----------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS documents (

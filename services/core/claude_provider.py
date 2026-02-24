@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 class ClaudeLLMProvider(LLMProvider):
     """Anthropic Claude LLM provider (LLM only — no embeddings API)."""
 
+    PROVIDER = "claude"
     MODEL = "claude-sonnet-4-20250514"
 
     def __init__(self, api_key: str, model: str | None = None):

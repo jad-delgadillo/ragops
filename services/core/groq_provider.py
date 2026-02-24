@@ -18,6 +18,7 @@ class GroqLLMProvider(LLMProvider):
     with a custom base_url.
     """
 
+    PROVIDER = "groq"
     MODEL = "llama-3.3-70b-versatile"
 
     def __init__(self, api_key: str, model: str | None = None):

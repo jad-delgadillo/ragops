@@ -6,6 +6,8 @@ from services.core.providers import EmbeddingProvider, LLMProvider
 class BedrockEmbeddingProvider(EmbeddingProvider):
     """AWS Bedrock Titan Embeddings v2 — stub for future implementation."""
 
+    PROVIDER = "bedrock"
+    MODEL = "amazon.titan-embed-text-v2:0"
     DIMENSION = 1024  # Titan Embeddings v2 default
 
     def __init__(self, region: str = "us-east-1"):
@@ -23,6 +25,8 @@ class BedrockEmbeddingProvider(EmbeddingProvider):
 
 class BedrockLLMProvider(LLMProvider):
     """AWS Bedrock text model — stub for future implementation."""
+
+    PROVIDER = "bedrock"
 
     def __init__(
         self,

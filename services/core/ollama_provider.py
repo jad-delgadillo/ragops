@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 class OllamaEmbeddingProvider(EmbeddingProvider):
     """Ollama local embedding provider."""
 
+    PROVIDER = "ollama"
+
     def __init__(self, base_url: str, model: str = "mxbai-embed-large"):
         self.base_url = base_url.rstrip("/")
         self.model = model
@@ -48,6 +50,8 @@ class OllamaEmbeddingProvider(EmbeddingProvider):
 
 class OllamaLLMProvider(LLMProvider):
     """Ollama local LLM provider."""
+
+    PROVIDER = "ollama"
 
     def __init__(self, base_url: str, model: str = "llama3"):
         self.base_url = base_url.rstrip("/")

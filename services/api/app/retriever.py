@@ -82,6 +82,8 @@ class QueryResult:
     retrieved: int = 0
     latency_ms: float = 0.0
     mode: str = "retrieval"  # "retrieval" or "rag"
+    retrieval_confidence: float = 0.0
+    retrieval_confidence_label: str = "low"  # heuristic: low | medium | high
 
 
 def is_broad_query(question: str) -> bool:
@@ -246,6 +248,29 @@ def retrieve(
         conn.close()
 
     return rerank_query_chunks(question=question, chunks=raw_results, top_k=top_k)
+
+
+def estimate_retrieval_confidence(chunks: list[dict[str, Any]]) -> tuple[float, str]:
+    """Estimate retrieval confidence as a bounded heuristic score in [0, 1]."""
+    if not chunks:
+        return 0.0, "low"
+
+    similarities = [
+        max(0.0, min(float(chunk.get("similarity", 0.0)), 1.0))
+        for chunk in chunks[:5]
+    ]
+    mean_similarity = sum(similarities) / max(1, len(similarities))
+    coverage = min(len(chunks) / 5.0, 1.0)
+    score = (mean_similarity * 0.75) + (coverage * 0.25)
+    score = max(0.0, min(score, 1.0))
+
+    if score >= 0.75:
+        label = "high"
+    elif score >= 0.5:
+        label = "medium"
+    else:
+        label = "low"
+    return round(score, 4), label
 
 
 # ---------------------------------------------------------------------------
@@ -500,6 +525,9 @@ def query(
     result = QueryResult(
         retrieved=len(chunks),
         citations=citations,
+    )
+    result.retrieval_confidence, result.retrieval_confidence_label = (
+        estimate_retrieval_confidence(chunks)
     )
 
     if llm_provider and chunks:

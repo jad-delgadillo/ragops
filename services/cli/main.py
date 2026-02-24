@@ -334,7 +334,12 @@ def cmd_scan(args: argparse.Namespace) -> None:
     from services.core.providers import get_embedding_provider
     from services.ingest.app.pipeline import ingest_local_directory
 
-    root = find_project_root() or Path.cwd()
+    scan_start = Path(args.path).expanduser().resolve()
+    if not scan_start.exists() or not scan_start.is_dir():
+        console.print(f"[red]Error:[/red] Scan path not found: {args.path}")
+        sys.exit(1)
+
+    root = find_project_root(scan_start) or scan_start
     config = load_config(root)
     collection = args.collection or config.name or root.name
 
@@ -342,11 +347,10 @@ def cmd_scan(args: argparse.Namespace) -> None:
     setup_logging("ERROR")
     provider = get_embedding_provider(settings)
 
-    manuals_output = (
-        Path(args.output).expanduser().resolve()
-        if args.output
-        else (root / ".ragops" / "manuals").resolve()
-    )
+    if args.output and args.output != "./.ragops/manuals":
+        manuals_output = Path(args.output).expanduser().resolve()
+    else:
+        manuals_output = (root / ".ragops" / "manuals").resolve()
     manuals_output.mkdir(parents=True, exist_ok=True)
 
     changed_paths: set[str] | None = None
@@ -401,6 +405,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
             "scan_mode": "incremental" if args.incremental else "full",
             "incremental_mode": incremental_mode,
             "changed_files": sorted(changed_paths) if changed_paths is not None else [],
+            "index_metadata": code_stats.index_metadata or {},
             "code_ingest": {
                 "indexed_docs": code_stats.indexed_docs,
                 "skipped_docs": code_stats.skipped_docs,
@@ -421,7 +426,17 @@ def cmd_scan(args: argparse.Namespace) -> None:
         "[bold green]Scan complete[/bold green]",
         "",
         f"[cyan]Collection:[/cyan] {collection}",
-        f"[cyan]Scan mode:[/cyan] {'incremental' if args.incremental else 'full'} ({incremental_mode})",
+        (
+            f"[cyan]Scan mode:[/cyan] "
+            f"{'incremental' if args.incremental else 'full'} ({incremental_mode})"
+        ),
+        (
+            f"[cyan]Index version:[/cyan] "
+            f"{(code_stats.index_metadata or {}).get('index_version', 'n/a')}"
+        ),
+        f"[cyan]Embedding:[/cyan] "
+        f"{(code_stats.index_metadata or {}).get('embedding_provider', 'unknown')}"
+        f"/{(code_stats.index_metadata or {}).get('embedding_model', 'unknown')}",
         f"[cyan]Code ingest:[/cyan] {code_stats.indexed_docs} indexed, "
         f"{code_stats.skipped_docs} skipped, {code_stats.total_chunks} chunks",
         f"[cyan]Manuals output:[/cyan] {manuals_output}",
@@ -528,6 +543,12 @@ def cmd_query(args: argparse.Namespace) -> None:
                     "citations": result.citations,
                     "latency_ms": round(result.latency_ms, 1),
                     "retrieved": result.retrieved,
+                    "retrieval_confidence": getattr(result, "retrieval_confidence", 0.0),
+                    "retrieval_confidence_label": getattr(
+                        result,
+                        "retrieval_confidence_label",
+                        "low",
+                    ),
                     "mode": result.mode,
                 },
                 indent=2,
@@ -580,7 +601,9 @@ def cmd_query(args: argparse.Namespace) -> None:
     console.print()
     console.print(
         f"[dim]Retrieved {result.retrieved} chunks "
-        f"from '{project_name}' in {result.latency_ms:.0f}ms[/dim]"
+        f"from '{project_name}' in {result.latency_ms:.0f}ms "
+        f"(confidence: {getattr(result, 'retrieval_confidence_label', 'low')} "
+        f"{float(getattr(result, 'retrieval_confidence', 0.0)):.2f})[/dim]"
     )
     console.print()
 
@@ -2455,6 +2478,70 @@ def cmd_config_doctor(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# migrate-embedding-dimension
+# ---------------------------------------------------------------------------
+
+
+def cmd_migrate_embedding_dimension(args: argparse.Namespace) -> None:
+    """Migrate stored embedding dimension and clear stale vectors/documents."""
+    from services.core.config import get_settings
+    from services.core.logging import setup_logging
+    from services.core.storage import (
+        get_connection,
+        migrate_embedding_dimension,
+        resolve_storage_backend,
+    )
+
+    settings = get_settings()
+    backend = resolve_storage_backend(settings)
+    setup_logging("ERROR")
+
+    if args.dimension <= 0:
+        console.print("[red]Error:[/red] --dimension must be > 0")
+        sys.exit(1)
+
+    warning = (
+        f"This will delete indexed documents/chunks and migrate embedding dimension "
+        f"to {args.dimension} on backend '{backend}'."
+    )
+    if not args.yes:
+        if sys.stdin.isatty():
+            console.print(f"[yellow]{warning}[/yellow]")
+            answer = input("Continue? [y/N]: ").strip().lower()
+            if answer not in {"y", "yes"}:
+                console.print("[yellow]Canceled.[/yellow]")
+                return
+        else:
+            console.print("[red]Error:[/red] Non-interactive mode requires --yes")
+            sys.exit(1)
+
+    conn = get_connection(settings)
+    try:
+        result = migrate_embedding_dimension(conn, new_dimension=args.dimension)
+    finally:
+        conn.close()
+
+    status = "changed" if result.get("changed") else "unchanged"
+    lines = [
+        f"[cyan]Backend:[/cyan] {result.get('backend', backend)}",
+        f"[cyan]Status:[/cyan] {status}",
+        f"[cyan]Previous dimension:[/cyan] {result.get('previous_dimension', 'unknown')}",
+        f"[cyan]New dimension:[/cyan] {result.get('new_dimension', args.dimension)}",
+        f"[cyan]Documents deleted:[/cyan] {result.get('documents_deleted', 0)}",
+        f"[cyan]Chunks deleted:[/cyan] {result.get('chunks_deleted', 0)}",
+    ]
+    console.print()
+    console.print(
+        Panel(
+            "\n".join(lines),
+            title="🧰 ragops migrate-embedding-dimension",
+            border_style="green",
+        )
+    )
+    console.print()
+
+
+# ---------------------------------------------------------------------------
 # providers
 # ---------------------------------------------------------------------------
 
@@ -2496,6 +2583,12 @@ def cmd_providers(args: argparse.Namespace) -> None:
             "key": "(none)",
             "features": "LLM + Embed",
         },
+        "huggingface": {
+            "name": "Hugging Face",
+            "models": "sentence-transformers/* (configurable)",
+            "key": "HUGGINGFACE_API_KEY",
+            "features": "Embed only",
+        },
     }
 
     table = Table(
@@ -2536,8 +2629,10 @@ def cmd_providers(args: argparse.Namespace) -> None:
     console.print(
         "[dim]Configure in .env:[/dim]\n"
         "  LLM_PROVIDER=gemini\n"
-        "  EMBEDDING_PROVIDER=openai\n"
-        "  GEMINI_API_KEY=your-key-here"
+        "  EMBEDDING_PROVIDER=huggingface\n"
+        "  GEMINI_API_KEY=your-key-here\n"
+        "  HUGGINGFACE_API_KEY=your-hf-token\n"
+        "  HUGGINGFACE_EMBEDDING_DIMENSION=384"
     )
     console.print()
 
@@ -2614,6 +2709,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_scan = sub.add_parser(
         "scan",
         help="One-command scan: ingest project + generate manuals + ingest manuals",
+    )
+    p_scan.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Project path to scan (default: current directory)",
     )
     p_scan.add_argument(
         "--collection",
@@ -2938,6 +3039,24 @@ def build_parser() -> argparse.ArgumentParser:
     # --- providers ---
     p_providers = sub.add_parser("providers", help="Show available LLM/Embedding providers")
     p_providers.set_defaults(func=cmd_providers)
+
+    # --- migrate-embedding-dimension ---
+    p_migrate_embedding = sub.add_parser(
+        "migrate-embedding-dimension",
+        help="Migrate embedding dimension and clear stale indexed vectors",
+    )
+    p_migrate_embedding.add_argument(
+        "--dimension",
+        type=int,
+        required=True,
+        help="Target embedding dimension (e.g. 384, 768, 1536)",
+    )
+    p_migrate_embedding.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm destructive migration without prompt",
+    )
+    p_migrate_embedding.set_defaults(func=cmd_migrate_embedding_dimension)
 
     # --- repo ---
     p_repo = sub.add_parser("repo", help="Manage GitHub repositories for indexing and chat")

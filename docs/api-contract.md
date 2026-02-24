@@ -72,6 +72,8 @@ Query the RAG system.
   ],
   "latency_ms": 512.3,
   "retrieved": 5,
+  "retrieval_confidence": 0.78,
+  "retrieval_confidence_label": "high",
   "mode": "retrieval",
   "principal": "api_client"
 }
@@ -80,6 +82,9 @@ Query the RAG system.
 **Modes:**
 - `retrieval`: returns top chunk as answer (no LLM)
 - `rag`: generates answer using LLM with context (requires `LLM_ENABLED=true`)
+
+`retrieval_confidence` is a heuristic score in `[0,1]` derived from top similarity values and
+retrieved coverage. It is a diagnostic signal, not a correctness guarantee.
 
 ---
 

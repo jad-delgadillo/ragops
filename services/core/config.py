@@ -23,6 +23,19 @@ class Settings(BaseSettings):
     # --- Embedding provider ---
     embedding_provider: str = Field(default="openai", alias="EMBEDDING_PROVIDER")
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
+    huggingface_api_key: str = Field(default="", alias="HUGGINGFACE_API_KEY")
+    huggingface_base_url: str = Field(
+        default="https://api-inference.huggingface.co",
+        alias="HUGGINGFACE_BASE_URL",
+    )
+    huggingface_embedding_model: str = Field(
+        default="sentence-transformers/all-MiniLM-L6-v2",
+        alias="HUGGINGFACE_EMBEDDING_MODEL",
+    )
+    huggingface_embedding_dimension: int = Field(
+        default=384,
+        alias="HUGGINGFACE_EMBEDDING_DIMENSION",
+    )
 
     # --- LLM provider ---
     llm_provider: str = Field(default="openai", alias="LLM_PROVIDER")
@@ -40,8 +53,6 @@ class Settings(BaseSettings):
         default="mxbai-embed-large", alias="OLLAMA_EMBEDDING_MODEL"
     )
     ollama_llm_model: str = Field(default="llama3", alias="OLLAMA_LLM_MODEL")
-
-
 
     # --- Retrieval ---
     top_k: int = Field(default=5, alias="TOP_K")

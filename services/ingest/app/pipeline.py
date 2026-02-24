@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,8 +15,10 @@ from services.core.providers import EmbeddingProvider
 from services.core.storage import (
     compute_sha256,
     document_exists,
+    document_exists_for_index,
     get_connection,
     upsert_chunks,
+    upsert_collection_index_metadata,
     upsert_document,
     validate_embedding_dimension,
 )
@@ -33,6 +36,7 @@ class IngestStats:
     total_chunks: int = 0
     elapsed_ms: float = 0.0
     errors: list[str] = field(default_factory=list)
+    index_metadata: dict[str, Any] | None = None
 
 
 SUPPORTED_EXTENSIONS = {
@@ -201,6 +205,15 @@ def ingest_local_directory(
     conn = get_connection(s)
     try:
         validate_embedding_dimension(conn, embedding_provider.dimension)
+        stats.index_metadata = upsert_collection_index_metadata(
+            conn,
+            collection=collection,
+            metadata=_build_index_metadata(
+                root_dir=dir_path,
+                embedding_provider=embedding_provider,
+                settings=s,
+            ),
+        )
         for file_path in files:
             try:
                 _ingest_file(
@@ -210,6 +223,7 @@ def ingest_local_directory(
                     collection=collection,
                     stats=stats,
                     settings=s,
+                    index_metadata=stats.index_metadata or {},
                 )
             except Exception as exc:
                 error_msg = f"Error ingesting {file_path}: {exc}"
@@ -230,6 +244,40 @@ def ingest_local_directory(
     return stats
 
 
+def _build_index_metadata(
+    *,
+    root_dir: Path,
+    embedding_provider: EmbeddingProvider,
+    settings: Settings,
+) -> dict[str, Any]:
+    """Build stable metadata used for index reproducibility/versioning."""
+    return {
+        "repo_commit": _resolve_git_commit(root_dir),
+        "embedding_provider": (
+            embedding_provider.provider_id or settings.embedding_provider
+        ).lower(),
+        "embedding_model": embedding_provider.model_id or "unknown",
+        "chunk_size": int(settings.chunk_size),
+        "chunk_overlap": int(settings.chunk_overlap),
+    }
+
+
+def _resolve_git_commit(root_dir: Path) -> str:
+    """Return HEAD commit hash when directory is inside a git repo."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root_dir), "rev-parse", "HEAD"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            return ""
+        return proc.stdout.strip()
+    except Exception:
+        return ""
+
+
 def _ingest_file(
     conn: Any,
     file_path: Path,
@@ -237,6 +285,7 @@ def _ingest_file(
     collection: str,
     stats: IngestStats,
     settings: Settings,
+    index_metadata: dict[str, Any],
 ) -> None:
     """Ingest a single file: extract text → chunk → embed → upsert."""
     suffix = file_path.suffix.lower()
@@ -271,8 +320,24 @@ def _ingest_file(
 
     sha = compute_sha256(text)
 
-    # SHA256 caching — skip unchanged docs
-    if document_exists(conn, sha, collection):
+    # SHA256 + index_version caching — re-index unchanged docs when index settings change
+    index_version = str(index_metadata.get("index_version", "")).strip()
+    if index_version:
+        if document_exists_for_index(
+            conn,
+            sha256=sha,
+            collection=collection,
+            index_version=index_version,
+        ):
+            logger.debug(
+                "Skipping unchanged doc for current index version: %s (sha=%s, version=%s)",
+                file_path,
+                sha[:12],
+                index_version,
+            )
+            stats.skipped_docs += 1
+            return
+    elif document_exists(conn, sha, collection):
         logger.debug("Skipping unchanged doc: %s (sha=%s)", file_path, sha[:12])
         stats.skipped_docs += 1
         return
@@ -300,7 +365,11 @@ def _ingest_file(
         s3_key=str(file_path),
         sha256=sha,
         collection=collection,
-        metadata={"filename": file_path.name, "size_bytes": file_path.stat().st_size},
+        metadata={
+            "filename": file_path.name,
+            "size_bytes": file_path.stat().st_size,
+            "index_version": index_version or "unknown",
+        },
     )
 
     # Build chunk records

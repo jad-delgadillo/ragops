@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 class OpenAIEmbeddingProvider(EmbeddingProvider):
     """OpenAI text-embedding-3-small provider."""
 
+    PROVIDER = "openai"
     MODEL = "text-embedding-3-small"
     DIMENSION = 1536
     MAX_BATCH = 2048  # OpenAI limit per request
@@ -46,6 +47,7 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
 class OpenAILLMProvider(LLMProvider):
     """OpenAI GPT-4o-mini LLM provider."""
 
+    PROVIDER = "openai"
     MODEL = "gpt-4o-mini"
 
     def __init__(self, api_key: str | None = None):
