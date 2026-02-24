@@ -93,7 +93,7 @@ def get_embedding_provider(settings: Any) -> EmbeddingProvider:
     """Factory to get the configured embedding provider.
 
     Supported values for EMBEDDING_PROVIDER:
-        openai (default), gemini, ollama
+        openai (default), gemini, huggingface, ollama
     """
     provider = settings.embedding_provider.lower()
 
@@ -111,6 +111,18 @@ def get_embedding_provider(settings: Any) -> EmbeddingProvider:
         if not settings.gemini_api_key:
             raise ValueError("GEMINI_API_KEY is required when EMBEDDING_PROVIDER=gemini")
         return GeminiEmbeddingProvider(api_key=settings.gemini_api_key)
+
+    if provider in {"huggingface", "hf"}:
+        from services.core.huggingface_provider import HuggingFaceEmbeddingProvider
+
+        if not settings.huggingface_api_key:
+            raise ValueError("HUGGINGFACE_API_KEY is required when EMBEDDING_PROVIDER=huggingface")
+        return HuggingFaceEmbeddingProvider(
+            api_key=settings.huggingface_api_key,
+            model=settings.huggingface_embedding_model,
+            base_url=settings.huggingface_base_url,
+            dimension=settings.huggingface_embedding_dimension,
+        )
 
     # Default: openai
     from services.core.openai_provider import OpenAIEmbeddingProvider

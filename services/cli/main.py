@@ -2519,6 +2519,12 @@ def cmd_providers(args: argparse.Namespace) -> None:
             "key": "(none)",
             "features": "LLM + Embed",
         },
+        "huggingface": {
+            "name": "Hugging Face",
+            "models": "sentence-transformers/* (configurable)",
+            "key": "HUGGINGFACE_API_KEY",
+            "features": "Embed only",
+        },
     }
 
     table = Table(
@@ -2559,8 +2565,10 @@ def cmd_providers(args: argparse.Namespace) -> None:
     console.print(
         "[dim]Configure in .env:[/dim]\n"
         "  LLM_PROVIDER=gemini\n"
-        "  EMBEDDING_PROVIDER=openai\n"
-        "  GEMINI_API_KEY=your-key-here"
+        "  EMBEDDING_PROVIDER=huggingface\n"
+        "  GEMINI_API_KEY=your-key-here\n"
+        "  HUGGINGFACE_API_KEY=your-hf-token\n"
+        "  HUGGINGFACE_EMBEDDING_DIMENSION=384"
     )
     console.print()
 

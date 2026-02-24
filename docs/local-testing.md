@@ -38,8 +38,11 @@ make docker-build
 # Scan the current project from inside container
 make docker-scan
 
-# Chat against the same mounted project
+# One-shot chat against the same mounted project
 make docker-chat
+
+# Interactive shell chat
+make docker-chat-shell
 ```
 
 ## Available Servers

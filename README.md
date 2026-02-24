@@ -42,7 +42,14 @@ docker run --rm -it \
   --env-file .env \
   ragops scan .
 
-# Start interactive chat in the same mounted project
+# One-shot chat in the same mounted project
+docker run --rm \
+  -v "$PWD:/workspace" \
+  -w /workspace \
+  --env-file .env \
+  ragops chat "How should I start learning this codebase?"
+
+# Interactive chat shell
 docker run --rm -it \
   -v "$PWD:/workspace" \
   -w /workspace \

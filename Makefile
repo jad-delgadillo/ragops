@@ -1,5 +1,5 @@
 # RAG Ops Platform
-.PHONY: dev dev-down ingest scan query chat feedback eval repo-add repo-add-lazy repo-sync repo-migrate repo-list frontend mock-api test lint fmt package package-check docker-build docker-scan docker-chat clean help
+.PHONY: dev dev-down ingest scan query chat feedback eval repo-add repo-add-lazy repo-sync repo-migrate repo-list frontend mock-api test lint fmt package package-check docker-build docker-scan docker-chat docker-chat-shell clean help
 
 # Use venv Python if available, otherwise system Python
 PYTHON := $(shell if [ -f .venv/bin/python ]; then echo .venv/bin/python; else echo python3; fi)
@@ -136,19 +136,27 @@ local-api: ## Start REAL local API (wraps Lambda handler) at http://localhost:80
 docker-build: ## Build local ragops image
 	docker build -t ragops .
 
-docker-scan: ## Run scan in container against current directory
-	docker run --rm -it \
+docker-scan: ## Run scan in container against current directory (non-interactive safe)
+	docker run --rm \
 		-v "$$(pwd):/workspace" \
 		-w /workspace \
 		--env-file .env \
-		ragops scan .
+		ragops scan "$${PATH_TO_SCAN:-.}"
 
-docker-chat: ## Run interactive chat in container against current directory
+docker-chat: ## Run one-shot chat in container (set Q=...)
+	docker run --rm \
+		-v "$$(pwd):/workspace" \
+		-w /workspace \
+		--env-file .env \
+		ragops chat "$${Q:-How should I start learning this codebase?}" \
+		$${COLLECTION:+--collection $$COLLECTION}
+
+docker-chat-shell: ## Run interactive chat shell in container
 	docker run --rm -it \
 		-v "$$(pwd):/workspace" \
 		-w /workspace \
 		--env-file .env \
-		ragops chat
+		ragops chat $${COLLECTION:+--collection $$COLLECTION}
 
 # ----------------------------------------------------------------
 # Testing

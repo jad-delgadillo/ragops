@@ -16,6 +16,7 @@ ragops chat
 make docker-build
 make docker-scan
 make docker-chat
+make docker-chat-shell
 ```
 
 ### Start the stack
