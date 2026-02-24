@@ -52,17 +52,28 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             BASE_SHA="${{ github.event.pull_request.base.sha }}"
             HEAD_SHA="${{ github.event.pull_request.head.sha }}"
-            CHANGED_PY=$(git diff --name-only --diff-filter=ACMRTUXB "$BASE_SHA...$HEAD_SHA" -- '*.py' | tr '\n' ' ')
-            if [ -z "$CHANGED_PY" ]; then
-              echo "No changed Python files to lint."
-              exit 0
-            fi
-            echo "Linting changed Python files: $CHANGED_PY"
-            ruff check $CHANGED_PY
           else
-            echo "Push to main: running full lint."
-            ruff check services/
+            BASE_SHA="${{ github.event.before }}"
+            HEAD_SHA="${{ github.sha }}"
+            if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+              BASE_SHA="$(git rev-parse "$HEAD_SHA^" 2>/dev/null || true)"
+            fi
           fi
+
+          if [ -z "$BASE_SHA" ] || [ -z "$HEAD_SHA" ]; then
+            echo "Unable to determine commit range; falling back to linting tracked Python files."
+            CHANGED_PY=$(git ls-files '*.py' | tr '\n' ' ')
+          else
+            CHANGED_PY=$(git diff --name-only --diff-filter=ACMRTUXB "$BASE_SHA...$HEAD_SHA" -- '*.py' | tr '\n' ' ')
+          fi
+
+          if [ -z "$CHANGED_PY" ]; then
+            echo "No changed Python files to lint."
+            exit 0
+          fi
+
+          echo "Linting Python files: $CHANGED_PY"
+          ruff check $CHANGED_PY
 
       - name: Run unit tests
         run: pytest services/ -v --tb=short
