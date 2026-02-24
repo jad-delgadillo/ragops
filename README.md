@@ -4,6 +4,16 @@ RAG Ops is a CLI codebase copilot.
 
 It indexes a project, generates project manuals, and answers questions with citations.
 
+## Impact
+
+RAG Ops is designed to demonstrate production-oriented DevOps/MLOps engineering, not just prompt UX:
+
+- Provider-agnostic embeddings: OpenAI, Gemini, Ollama (local), and Hugging Face.
+- Reproducible indexing: version-aware cache keys (`repo_commit`, model, chunking strategy, `index_version`).
+- Safe model transitions: explicit embedding-dimension migration command for storage resets.
+- CI automation: pull request summary workflow with confidence labeling and fallback behavior.
+- Container-first operations: Docker workflows for consistent local and automation execution.
+
 ## MVP in One Flow
 
 ```bash

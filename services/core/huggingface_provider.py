@@ -105,5 +105,9 @@ class HuggingFaceEmbeddingProvider(EmbeddingProvider):
                     )
                 embeddings.append(vector)
 
-        logger.info("Hugging Face embeddings generated for %d texts (model=%s)", len(texts), self.model)
+        logger.info(
+            "Hugging Face embeddings generated for %d texts (model=%s)",
+            len(texts),
+            self.model,
+        )
         return embeddings

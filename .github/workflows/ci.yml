@@ -34,6 +34,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -46,7 +48,21 @@ jobs:
           pip install -e ".[dev]"
 
       - name: Lint with ruff
-        run: ruff check services/
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+            CHANGED_PY=$(git diff --name-only --diff-filter=ACMRTUXB "$BASE_SHA...$HEAD_SHA" -- '*.py' | tr '\n' ' ')
+            if [ -z "$CHANGED_PY" ]; then
+              echo "No changed Python files to lint."
+              exit 0
+            fi
+            echo "Linting changed Python files: $CHANGED_PY"
+            ruff check $CHANGED_PY
+          else
+            echo "Push to main: running full lint."
+            ruff check services/
+          fi
 
       - name: Run unit tests
         run: pytest services/ -v --tb=short
