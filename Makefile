@@ -1,5 +1,5 @@
 # RAG Ops Platform
-.PHONY: dev dev-down ingest scan query chat feedback eval repo-add repo-add-lazy repo-sync repo-migrate repo-list frontend mock-api test lint fmt package package-check clean help
+.PHONY: dev dev-down ingest scan query chat feedback eval repo-add repo-add-lazy repo-sync repo-migrate repo-list frontend mock-api test lint fmt package package-check docker-build docker-scan docker-chat clean help
 
 # Use venv Python if available, otherwise system Python
 PYTHON := $(shell if [ -f .venv/bin/python ]; then echo .venv/bin/python; else echo python3; fi)
@@ -129,6 +129,26 @@ mock-api: ## Start mock /v1/chat + /v1/feedback API at http://localhost:8090
 
 local-api: ## Start REAL local API (wraps Lambda handler) at http://localhost:8090
 	$(PYTHON) scripts/local_api.py --port 8090
+
+# ----------------------------------------------------------------
+# Docker CLI workflow
+# ----------------------------------------------------------------
+docker-build: ## Build local ragops image
+	docker build -t ragops .
+
+docker-scan: ## Run scan in container against current directory
+	docker run --rm -it \
+		-v "$$(pwd):/workspace" \
+		-w /workspace \
+		--env-file .env \
+		ragops scan .
+
+docker-chat: ## Run interactive chat in container against current directory
+	docker run --rm -it \
+		-v "$$(pwd):/workspace" \
+		-w /workspace \
+		--env-file .env \
+		ragops chat
 
 # ----------------------------------------------------------------
 # Testing

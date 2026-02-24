@@ -22,15 +22,16 @@ services:
   ragops:
     build: .
     container_name: ragops-cli
+    working_dir: /workspace
     volumes:
-      - .:/app
+      - .:/workspace
     environment:
       - DB_HOST=postgres
     env_file: .env
+    command: ["--help"]
     depends_on:
       postgres:
         condition: service_healthy
 
 volumes:
   pgdata:
-

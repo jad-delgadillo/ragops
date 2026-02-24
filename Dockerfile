@@ -11,24 +11,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libjpeg-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install python dependencies
-COPY pyproject.toml .
-RUN pip install --no-cache-dir .
+# Install package into image
+COPY pyproject.toml README.md LICENSE /app/
+COPY services /app/services
+RUN pip install --upgrade pip && pip install --no-cache-dir .
 
 # Final stage
 FROM python:3.11-slim
 
-WORKDIR /app
+WORKDIR /workspace
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy only the installed packages from builder
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
-
-# Copy the source code
-COPY services /app/services
-
-# Ensure the app is installed in editable mode or PYTHONPATH is set
-ENV PYTHONPATH=/app
+COPY --from=builder /usr/local /usr/local
+ENV PYTHONUNBUFFERED=1
 
 # Default entrypoint is the ragops CLI
 ENTRYPOINT ["ragops"]

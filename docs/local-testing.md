@@ -29,6 +29,19 @@ make frontend
 # 6. Open http://localhost:4173 in your browser
 ```
 
+## Docker CLI (No Local Python Needed)
+
+```bash
+# Build the image once
+make docker-build
+
+# Scan the current project from inside container
+make docker-scan
+
+# Chat against the same mounted project
+make docker-chat
+```
+
 ## Available Servers
 
 | Command | Port | Purpose |

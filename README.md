@@ -30,6 +30,26 @@ Single-turn usage also works:
 ragops chat "How should I start learning this codebase?"
 ```
 
+## Quickstart (Docker CLI)
+
+```bash
+docker build -t ragops .
+
+# Scan current project (path positional supported)
+docker run --rm -it \
+  -v "$PWD:/workspace" \
+  -w /workspace \
+  --env-file .env \
+  ragops scan .
+
+# Start interactive chat in the same mounted project
+docker run --rm -it \
+  -v "$PWD:/workspace" \
+  -w /workspace \
+  --env-file .env \
+  ragops chat
+```
+
 ## What `scan` Produces
 
 `ragops scan` indexes the repository and writes manuals to `./.ragops/manuals` by default.
