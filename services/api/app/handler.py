@@ -206,6 +206,8 @@ def _handle_query(event: dict[str, Any]) -> dict[str, Any]:
                     "citations": result.citations,
                     "latency_ms": round(result.latency_ms, 1),
                     "retrieved": result.retrieved,
+                    "retrieval_confidence": result.retrieval_confidence,
+                    "retrieval_confidence_label": result.retrieval_confidence_label,
                     "mode": result.mode,
                     "principal": decision.principal,
                 }

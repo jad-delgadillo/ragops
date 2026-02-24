@@ -334,7 +334,12 @@ def cmd_scan(args: argparse.Namespace) -> None:
     from services.core.providers import get_embedding_provider
     from services.ingest.app.pipeline import ingest_local_directory
 
-    root = find_project_root() or Path.cwd()
+    scan_start = Path(args.path).expanduser().resolve()
+    if not scan_start.exists() or not scan_start.is_dir():
+        console.print(f"[red]Error:[/red] Scan path not found: {args.path}")
+        sys.exit(1)
+
+    root = find_project_root(scan_start) or scan_start
     config = load_config(root)
     collection = args.collection or config.name or root.name
 
@@ -342,11 +347,10 @@ def cmd_scan(args: argparse.Namespace) -> None:
     setup_logging("ERROR")
     provider = get_embedding_provider(settings)
 
-    manuals_output = (
-        Path(args.output).expanduser().resolve()
-        if args.output
-        else (root / ".ragops" / "manuals").resolve()
-    )
+    if args.output and args.output != "./.ragops/manuals":
+        manuals_output = Path(args.output).expanduser().resolve()
+    else:
+        manuals_output = (root / ".ragops" / "manuals").resolve()
     manuals_output.mkdir(parents=True, exist_ok=True)
 
     changed_paths: set[str] | None = None
@@ -401,6 +405,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
             "scan_mode": "incremental" if args.incremental else "full",
             "incremental_mode": incremental_mode,
             "changed_files": sorted(changed_paths) if changed_paths is not None else [],
+            "index_metadata": code_stats.index_metadata or {},
             "code_ingest": {
                 "indexed_docs": code_stats.indexed_docs,
                 "skipped_docs": code_stats.skipped_docs,
@@ -421,7 +426,17 @@ def cmd_scan(args: argparse.Namespace) -> None:
         "[bold green]Scan complete[/bold green]",
         "",
         f"[cyan]Collection:[/cyan] {collection}",
-        f"[cyan]Scan mode:[/cyan] {'incremental' if args.incremental else 'full'} ({incremental_mode})",
+        (
+            f"[cyan]Scan mode:[/cyan] "
+            f"{'incremental' if args.incremental else 'full'} ({incremental_mode})"
+        ),
+        (
+            f"[cyan]Index version:[/cyan] "
+            f"{(code_stats.index_metadata or {}).get('index_version', 'n/a')}"
+        ),
+        f"[cyan]Embedding:[/cyan] "
+        f"{(code_stats.index_metadata or {}).get('embedding_provider', 'unknown')}"
+        f"/{(code_stats.index_metadata or {}).get('embedding_model', 'unknown')}",
         f"[cyan]Code ingest:[/cyan] {code_stats.indexed_docs} indexed, "
         f"{code_stats.skipped_docs} skipped, {code_stats.total_chunks} chunks",
         f"[cyan]Manuals output:[/cyan] {manuals_output}",
@@ -528,6 +543,12 @@ def cmd_query(args: argparse.Namespace) -> None:
                     "citations": result.citations,
                     "latency_ms": round(result.latency_ms, 1),
                     "retrieved": result.retrieved,
+                    "retrieval_confidence": getattr(result, "retrieval_confidence", 0.0),
+                    "retrieval_confidence_label": getattr(
+                        result,
+                        "retrieval_confidence_label",
+                        "low",
+                    ),
                     "mode": result.mode,
                 },
                 indent=2,
@@ -580,7 +601,9 @@ def cmd_query(args: argparse.Namespace) -> None:
     console.print()
     console.print(
         f"[dim]Retrieved {result.retrieved} chunks "
-        f"from '{project_name}' in {result.latency_ms:.0f}ms[/dim]"
+        f"from '{project_name}' in {result.latency_ms:.0f}ms "
+        f"(confidence: {getattr(result, 'retrieval_confidence_label', 'low')} "
+        f"{float(getattr(result, 'retrieval_confidence', 0.0)):.2f})[/dim]"
     )
     console.print()
 
@@ -2614,6 +2637,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_scan = sub.add_parser(
         "scan",
         help="One-command scan: ingest project + generate manuals + ingest manuals",
+    )
+    p_scan.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Project path to scan (default: current directory)",
     )
     p_scan.add_argument(
         "--collection",

@@ -18,6 +18,37 @@ class TestProviderInterfaces:
         with pytest.raises(TypeError):
             LLMProvider()  # type: ignore
 
+    def test_provider_identity_metadata_from_class_attributes(self):
+        class DummyEmbedding(EmbeddingProvider):
+            PROVIDER = "dummy"
+            MODEL = "embed-1"
+
+            @property
+            def dimension(self) -> int:
+                return 3
+
+            def embed(self, texts: list[str]) -> list[list[float]]:
+                return [[0.0, 0.0, 0.0] for _ in texts]
+
+        provider = DummyEmbedding()
+        assert provider.provider_id == "dummy"
+        assert provider.model_id == "embed-1"
+
+    def test_provider_identity_metadata_falls_back_to_class_name(self):
+        class LocalLLM(LLMProvider):
+            def generate(
+                self,
+                prompt: str,
+                *,
+                max_tokens: int = 1024,
+                temperature: float = 0.1,
+            ) -> str:
+                return "ok"
+
+        provider = LocalLLM()
+        assert provider.provider_id == "local"
+        assert provider.model_id == ""
+
 
 class TestBedrockProviderStubs:
     """Bedrock stubs should raise NotImplementedError."""

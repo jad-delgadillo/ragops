@@ -6,9 +6,12 @@ from pathlib import Path
 
 from services.core.config import Settings
 from services.core.storage import (
+    build_index_version,
     count_chat_turns,
+    document_exists_for_index,
     ensure_chat_tables,
     ensure_feedback_table,
+    get_collection_index_metadata,
     get_connection,
     insert_chat_message,
     insert_feedback,
@@ -17,6 +20,7 @@ from services.core.storage import (
     search_vectors,
     upsert_chat_session,
     upsert_chunks,
+    upsert_collection_index_metadata,
     upsert_document,
     validate_embedding_dimension,
 )
@@ -134,3 +138,72 @@ def test_sqlite_chat_and_feedback_roundtrip(tmp_path: Path) -> None:
     assert turns == 1
     assert feedback_id > 0
 
+
+def test_index_version_changes_when_chunking_changes() -> None:
+    base = {
+        "repo_commit": "abc123",
+        "embedding_provider": "openai",
+        "embedding_model": "text-embedding-3-small",
+        "chunk_size": 512,
+        "chunk_overlap": 64,
+    }
+    v1 = build_index_version(base)
+    v2 = build_index_version({**base, "chunk_size": 256})
+    assert v1 != v2
+
+
+def test_sqlite_index_metadata_roundtrip(tmp_path: Path) -> None:
+    settings = _sqlite_settings(tmp_path / "ragops.db")
+    conn = get_connection(settings)
+    try:
+        saved = upsert_collection_index_metadata(
+            conn,
+            collection="demo",
+            metadata={
+                "repo_commit": "abc123",
+                "embedding_provider": "openai",
+                "embedding_model": "text-embedding-3-small",
+                "chunk_size": 512,
+                "chunk_overlap": 64,
+            },
+        )
+        loaded = get_collection_index_metadata(conn, collection="demo")
+    finally:
+        conn.close()
+
+    assert loaded is not None
+    assert loaded["collection"] == "demo"
+    assert loaded["repo_commit"] == "abc123"
+    assert loaded["embedding_provider"] == "openai"
+    assert loaded["embedding_model"] == "text-embedding-3-small"
+    assert loaded["index_version"] == saved["index_version"]
+
+
+def test_document_exists_for_index_requires_matching_version(tmp_path: Path) -> None:
+    settings = _sqlite_settings(tmp_path / "ragops.db")
+    conn = get_connection(settings)
+    try:
+        doc_id = upsert_document(
+            conn,
+            s3_key="README.md",
+            sha256="sha-readme",
+            collection="demo",
+            metadata={"index_version": "v1"},
+        )
+        same = document_exists_for_index(
+            conn,
+            sha256="sha-readme",
+            collection="demo",
+            index_version="v1",
+        )
+        other = document_exists_for_index(
+            conn,
+            sha256="sha-readme",
+            collection="demo",
+            index_version="v2",
+        )
+    finally:
+        conn.close()
+
+    assert same == doc_id
+    assert other is None

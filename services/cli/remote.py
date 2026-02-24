@@ -29,6 +29,10 @@ def _query_remote(question: str, url: str, collection: str) -> Any:
             retrieved=data.get("retrieved", 0),
             latency_ms=data.get("latency_ms", 0.0),
             mode=data.get("mode", "retrieval"),
+            retrieval_confidence=float(data.get("retrieval_confidence", 0.0)),
+            retrieval_confidence_label=str(
+                data.get("retrieval_confidence_label", "low")
+            ),
         )
     except Exception as exc:
         return QueryResult(
@@ -64,6 +68,10 @@ def _query_remote_with_auth(
             retrieved=data.get("retrieved", 0),
             latency_ms=data.get("latency_ms", 0.0),
             mode=data.get("mode", "retrieval"),
+            retrieval_confidence=float(data.get("retrieval_confidence", 0.0)),
+            retrieval_confidence_label=str(
+                data.get("retrieval_confidence_label", "low")
+            ),
         )
     except Exception as exc:
         return QueryResult(

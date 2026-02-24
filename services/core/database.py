@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 VECTOR_TYPE_PATTERN = re.compile(r"^vector(?:\((\d+)\))?$")
 INVALID_DSN_LITERALS = {"yes", "no", "true", "false", "on", "off", "1", "0"}
+INDEX_METADATA_PREFIX = "index_metadata:"
 
 # ---------------------------------------------------------------------------
 # Connection helpers
@@ -118,6 +120,88 @@ def validate_embedding_dimension(conn: psycopg.Connection, provider_dimension: i
 
 
 # ---------------------------------------------------------------------------
+# Metadata helpers
+# ---------------------------------------------------------------------------
+
+
+def ensure_meta_table(conn: psycopg.Connection) -> None:
+    """Create metadata table used for storage-level run/index metadata."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ragops_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """
+    )
+    conn.commit()
+
+
+def get_meta_value(conn: psycopg.Connection, key: str) -> str | None:
+    """Return metadata value for a key or None when absent."""
+    ensure_meta_table(conn)
+    row = conn.execute(
+        "SELECT value FROM ragops_meta WHERE key = %s",
+        (key,),
+    ).fetchone()
+    if not row:
+        return None
+    value = row.get("value")
+    return str(value) if value is not None else None
+
+
+def upsert_meta_value(conn: psycopg.Connection, key: str, value: str) -> None:
+    """Insert/update a metadata value by key."""
+    ensure_meta_table(conn)
+    conn.execute(
+        """
+        INSERT INTO ragops_meta (key, value, updated_at)
+        VALUES (%s, %s, NOW())
+        ON CONFLICT (key)
+        DO UPDATE SET
+            value = EXCLUDED.value,
+            updated_at = NOW()
+        """,
+        (key, value),
+    )
+    conn.commit()
+
+
+def get_collection_index_metadata(
+    conn: psycopg.Connection,
+    *,
+    collection: str,
+) -> dict[str, Any] | None:
+    """Return stored index metadata payload for a collection."""
+    raw = get_meta_value(conn, f"{INDEX_METADATA_PREFIX}{collection}")
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def upsert_collection_index_metadata(
+    conn: psycopg.Connection,
+    *,
+    collection: str,
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist and return index metadata payload for a collection."""
+    payload = dict(metadata)
+    payload["collection"] = collection
+    payload.setdefault("created_at", datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    serialized = json.dumps(payload, sort_keys=True)
+    upsert_meta_value(conn, f"{INDEX_METADATA_PREFIX}{collection}", serialized)
+    return payload
+
+
+# ---------------------------------------------------------------------------
 # Document operations
 # ---------------------------------------------------------------------------
 
@@ -132,6 +216,27 @@ def document_exists(conn: psycopg.Connection, sha256: str, collection: str) -> i
     row = conn.execute(
         "SELECT id FROM documents WHERE sha256 = %s AND collection = %s",
         (sha256, collection),
+    ).fetchone()
+    return row["id"] if row else None
+
+
+def document_exists_for_index(
+    conn: psycopg.Connection,
+    *,
+    sha256: str,
+    collection: str,
+    index_version: str,
+) -> int | None:
+    """Return doc id when sha+collection exists and matches index_version metadata."""
+    row = conn.execute(
+        """
+        SELECT id
+        FROM documents
+        WHERE sha256 = %s
+          AND collection = %s
+          AND COALESCE(metadata->>'index_version', '') = %s
+        """,
+        (sha256, collection, index_version),
     ).fetchone()
     return row["id"] if row else None
 
@@ -742,7 +847,9 @@ def upsert_file_tree(
         for f in files:
             cur.execute(
                 """
-                INSERT INTO repo_files (collection, owner, repo, ref, file_path, file_sha, file_size)
+                INSERT INTO repo_files (
+                    collection, owner, repo, ref, file_path, file_sha, file_size
+                )
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (collection, file_path)
                 DO UPDATE SET

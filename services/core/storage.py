@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,14 @@ from services.core.config import Settings, get_settings
 logger = logging.getLogger(__name__)
 
 DEFAULT_SQLITE_DB_PATH = ".ragops/ragops.db"
+INDEX_METADATA_PREFIX = "index_metadata:"
+INDEX_VERSION_KEYS = (
+    "repo_commit",
+    "embedding_provider",
+    "embedding_model",
+    "chunk_size",
+    "chunk_overlap",
+)
 
 
 def resolve_storage_backend(settings: Settings | None = None) -> str:
@@ -256,6 +265,65 @@ def compute_sha256(content: str) -> str:
     return pgdb.compute_sha256(content)
 
 
+def build_index_version(metadata: dict[str, Any]) -> str:
+    """Build deterministic index-version hash from metadata-driving fields."""
+    normalized = {key: metadata.get(key, "") for key in INDEX_VERSION_KEYS}
+    serialized = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
+    return compute_sha256(serialized)[:16]
+
+
+def get_collection_index_metadata(
+    conn: Any,
+    *,
+    collection: str,
+) -> dict[str, Any] | None:
+    """Return index metadata payload for a collection."""
+    if not _is_sqlite(conn):
+        return pgdb.get_collection_index_metadata(conn, collection=collection)
+    row = conn.execute(
+        "SELECT value FROM ragops_meta WHERE key = ?",
+        (f"{INDEX_METADATA_PREFIX}{collection}",),
+    ).fetchone()
+    if not row:
+        return None
+    payload = _json_load(row["value"], None)
+    return payload if isinstance(payload, dict) else None
+
+
+def upsert_collection_index_metadata(
+    conn: Any,
+    *,
+    collection: str,
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist and return index metadata for a collection."""
+    payload = dict(metadata)
+    payload["collection"] = collection
+    payload["index_version"] = build_index_version(payload)
+    payload.setdefault("created_at", datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))
+
+    if not _is_sqlite(conn):
+        return pgdb.upsert_collection_index_metadata(
+            conn,
+            collection=collection,
+            metadata=payload,
+        )
+
+    conn.execute(
+        """
+        INSERT INTO ragops_meta (key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """,
+        (
+            f"{INDEX_METADATA_PREFIX}{collection}",
+            json.dumps(payload, sort_keys=True),
+        ),
+    )
+    conn.commit()
+    return payload
+
+
 def document_exists(conn: Any, sha256: str, collection: str) -> int | None:
     """Check if a document with this SHA256 already exists."""
     if not _is_sqlite(conn):
@@ -265,6 +333,36 @@ def document_exists(conn: Any, sha256: str, collection: str) -> int | None:
         (sha256, collection),
     ).fetchone()
     return int(row["id"]) if row else None
+
+
+def document_exists_for_index(
+    conn: Any,
+    *,
+    sha256: str,
+    collection: str,
+    index_version: str,
+) -> int | None:
+    """Check if a document exists for this sha+collection+index_version."""
+    if not _is_sqlite(conn):
+        return pgdb.document_exists_for_index(
+            conn,
+            sha256=sha256,
+            collection=collection,
+            index_version=index_version,
+        )
+
+    row = conn.execute(
+        "SELECT id, metadata FROM documents WHERE sha256 = ? AND collection = ?",
+        (sha256, collection),
+    ).fetchone()
+    if not row:
+        return None
+    metadata = _json_load(row["metadata"], {})
+    if not isinstance(metadata, dict):
+        return None
+    if str(metadata.get("index_version", "")) != str(index_version):
+        return None
+    return int(row["id"])
 
 
 def upsert_document(
@@ -981,4 +1079,3 @@ def health_check(conn: Any) -> dict[str, str]:
     except Exception as exc:
         logger.error("SQLite health check failed: %s", exc)
         return {"db": f"error: {exc}"}
-

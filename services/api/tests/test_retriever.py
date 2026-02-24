@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from services.api.app.retriever import (
+    estimate_retrieval_confidence,
     extract_file_hints,
     is_broad_query,
     is_low_value_source,
@@ -163,3 +164,16 @@ def test_rerank_query_chunks_uses_codeowners_area_boost(tmp_path: Path) -> None:
         top_k=1,
     )
     assert ranked[0]["source_file"] == str(api_file)
+
+
+def test_estimate_retrieval_confidence_is_high_for_strong_dense_hits() -> None:
+    chunks = [{"similarity": 0.92} for _ in range(5)]
+    score, label = estimate_retrieval_confidence(chunks)
+    assert score >= 0.75
+    assert label == "high"
+
+
+def test_estimate_retrieval_confidence_is_low_when_no_hits() -> None:
+    score, label = estimate_retrieval_confidence([])
+    assert score == 0.0
+    assert label == "low"
